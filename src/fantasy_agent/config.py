@@ -28,7 +28,7 @@ class Settings(BaseSettings):
 
     # Agent (Claude tool-calling loop). API key only required when `fantasy-agent ask` runs.
     anthropic_api_key: str | None = None
-    anthropic_model: str = "claude-sonnet-5"
+    anthropic_model: str = "claude-haiku-4-5"
     anthropic_max_tokens: int = 4096
 
 
