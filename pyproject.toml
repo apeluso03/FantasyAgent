@@ -18,9 +18,14 @@ dev = [
     "pytest>=8.0",
     "pytest-mock>=3.14",
 ]
+build = [
+    "pyinstaller>=6.10",
+    "pyinstaller-hooks-contrib>=2024.9",
+]
 
 [project.scripts]
 fantasy-agent = "fantasy_agent.cli:app"
+fantasy-agent-gui = "fantasy_agent.gui:main"
 
 [build-system]
 requires = ["setuptools>=68"]

@@ -22,3 +22,7 @@ data/*.sqlite3
 .pytest_cache/
 .coverage
 htmlcov/
+
+# PyInstaller build output (regenerate with build_exe.bat / pyinstaller FantasyAgent.spec)
+build/
+dist/

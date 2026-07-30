@@ -61,6 +61,33 @@ way, on `RANKINGS_CACHE_TTL_HOURS`. The agent never scrapes or hits Sleeper live
 — with one deliberate exception: `best-available` polls the draft endpoint fresh on every call,
 because "who's been picked" can't be allowed to go stale during a live draft.
 
+## Desktop GUI
+
+A small dark-themed Tkinter launcher (`gui.py`) wraps the CLI for point-and-click use — quick
+buttons for `sync`/`keepers`/`best-available`/etc., a text box for `ask`, and a live output panel.
+No separate install: it's the same `fantasy_agent` package.
+
+```bash
+./run_gui.bat          # double-click, or run from a shell -- launches with the venv's pythonw
+```
+
+### Standalone .exe (no Python/venv required to run)
+
+```bash
+pip install -e ".[build]"     # PyInstaller + hook contrib, one-time
+./build_exe.bat                # or: .venv\Scripts\pyinstaller.exe FantasyAgent.spec
+```
+
+Produces `dist/FantasyAgent/FantasyAgent.exe` plus a supporting `_internal/` folder — keep them
+together (it's a folder-based build, not a single portable file; see below for why). Copy your
+`.env` into `dist/FantasyAgent/` alongside the exe before running.
+
+**Why `--onedir`, not `--onefile`.** The GUI runs every command (`sync`, `ask`, ...) by launching
+itself again as a subprocess with CLI arguments — `launcher.py` dispatches on `sys.argv` to decide
+whether a given launch is "open the GUI" or "run the CLI." A `--onefile` build re-extracts its
+entire bundle to a temp directory on *every* launch, which would make every single button click
+pay that extraction cost. `--onedir` runs directly from disk with no such penalty.
+
 ## Architecture
 
 ```
@@ -82,7 +109,7 @@ because "who's been picked" can't be allowed to go stale during a live draft.
 
 The agent doesn't do one API call and hand it to Claude — `agent/core.py` runs an explicit
 `while stop_reason == "tool_use"` loop (see "Why a manual loop" below). Claude decides which of
-the 7 tools in `agent/tools.py` it needs for a given question, the handler runs against the
+the 8 tools in `agent/tools.py` it needs for a given question, the handler runs against the
 local cache (or, for `get_best_available`, a live Sleeper call), and the result goes back to
 Claude to reason over — possibly triggering more tool calls — before it answers. Every tool call
 and result is logged (`INFO fantasy_agent.agent.core`), which is both a debugging aid and the
@@ -179,7 +206,14 @@ src/fantasy_agent/
     tools.py           # tool schemas + handlers exposed to Claude
     core.py            # the manual tool-calling loop
   cli.py                # `fantasy-agent` entrypoint
+  gui.py                # Tkinter desktop launcher
 tests/
+assets/
+  icon.ico              # app icon (scripts/make_icon.py regenerates it)
+launcher.py              # PyInstaller entry point (dispatches to CLI or GUI)
+FantasyAgent.spec        # PyInstaller build config
+run_gui.bat               # double-click launcher (dev mode, uses the venv)
+build_exe.bat             # builds the standalone .exe
 ```
 
 ## Success criteria (from the spec)
