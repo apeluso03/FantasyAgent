@@ -35,7 +35,8 @@ works against the local cache with no API key.
 # --- Data layer: pull everything into the local cache ---
 fantasy-agent sync                          # league, rosters, users, players, draft history
 fantasy-agent league                        # cached league settings
-fantasy-agent rosters                       # each roster's owner + player count
+fantasy-agent rosters                       # power-rank every team 1-N, with QB/RB/WR/TE breakdown
+fantasy-agent rosters --detail              # + each team's best starting lineup
 fantasy-agent players --search "mahomes"    # sanity-check the player cache
 
 # --- Rankings: scrape FantasyPros, match to Sleeper player IDs ---
@@ -109,7 +110,7 @@ pay that extraction cost. `--onedir` runs directly from disk with no such penalt
 
 The agent doesn't do one API call and hand it to Claude — `agent/core.py` runs an explicit
 `while stop_reason == "tool_use"` loop (see "Why a manual loop" below). Claude decides which of
-the 8 tools in `agent/tools.py` it needs for a given question, the handler runs against the
+the 9 tools in `agent/tools.py` it needs for a given question, the handler runs against the
 local cache (or, for `get_best_available`, a live Sleeper call), and the result goes back to
 Claude to reason over — possibly triggering more tool calls — before it answers. Every tool call
 and result is logged (`INFO fantasy_agent.agent.core`), which is both a debugging aid and the
@@ -176,6 +177,18 @@ valued the way a 2-QB/superflex market values them. The draft assistant's own jo
 exclude already-drafted and already-rostered players, and annotate each remaining one with how it
 fits your roster's current position counts.
 
+**Power rankings** (`power_rankings.py`). Ranks every team 1..N by the value of its best possible
+*starting* lineup, not total roster value (which would just reward bench-hoarding). Filling
+FLEX/SUPER_FLEX is a greedy assignment — exact-position slots first with each position's best
+remaining player, then FLEX from what's left at RB/WR/TE, then SUPER_FLEX from what's left at
+QB/RB/WR/TE — rather than a true optimal-assignment solver; good enough in practice and easy to
+explain (and it's what correctly stacks a second elite QB into SUPER_FLEX over a worse flex
+option). Alongside the overall rank, each team also gets a QB/RB/WR/TE positional rank computed
+from *whole-roster* value at that position — this is what actually answers "where is this team
+strong or thin," since a team can have a great starting lineup while sitting on zero bench depth
+at a position, or vice versa. Both use the same `trade.player_value` curve as the trade analyzer,
+so power rankings and trade values stay on one consistent scale.
+
 ## Tests
 
 ```bash
@@ -198,10 +211,11 @@ src/fantasy_agent/
   rankings/            # FantasyPros scraper, player-ID matching, response schemas
   db/                  # SQLAlchemy models + session (SQLite cache)
   sync.py              # pulls Sleeper + FantasyPros data into the local cache
-  roster_analysis.py    # shared position-count/need helpers (trade.py + draft.py)
+  roster_analysis.py    # shared position-count/need helpers (trade.py + draft.py + power_rankings.py)
   keeper.py            # keeper decision logic (pure, no LLM)
   trade.py             # trade analyzer (pure, no LLM)
   draft.py             # live best-available draft assistant (pure, no LLM)
+  power_rankings.py    # league-wide power rankings + positional breakdown (pure, no LLM)
   agent/
     tools.py           # tool schemas + handlers exposed to Claude
     core.py            # the manual tool-calling loop

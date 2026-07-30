@@ -9,6 +9,7 @@ from fantasy_agent.agent.tools import (
     _tool_evaluate_trade,
     _tool_get_keeper_candidates,
     _tool_get_league_info,
+    _tool_get_power_rankings,
     _tool_get_roster,
     _tool_list_rosters,
     _tool_search_player,
@@ -147,3 +148,12 @@ def test_evaluate_trade_resolves_names_and_returns_verdict(session: Session):
     assert "verdict" in result
     assert "reasoning" in result["side_a"]
     assert "reasoning" in result["side_b"]
+
+
+def test_get_power_rankings_ranks_every_team_with_positional_breakdown(session: Session):
+    _seed(session)
+    result = _tool_get_power_rankings(session)
+    ranks = sorted(t["rank"] for t in result["rankings"])
+    assert ranks == [1, 2]
+    for team in result["rankings"]:
+        assert set(team["positional_rank"]) == {"QB", "RB", "WR", "TE"}

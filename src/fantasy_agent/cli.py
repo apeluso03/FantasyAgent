@@ -13,6 +13,7 @@ Usage:
     fantasy-agent trade --side-a-owner <id> --side-a-gives p1,p2 --side-b-owner <id> --side-b-gives p3
     fantasy-agent ask "should I keep Bijan Robinson or draft fresh?"
     fantasy-agent best-available
+    fantasy-agent rosters --detail
 """
 
 from __future__ import annotations
@@ -24,10 +25,12 @@ import typer
 from .agent.core import run_agent
 from .agent.tools import ToolError, resolve_owner
 from .config import settings
-from .db.models import LeagueRecord, PlayerAlias, PlayerRecord, RankingRecord, RosterRecord, UserRecord
+from .db.models import LeagueRecord, PlayerAlias, PlayerRecord, RankingRecord
 from .db.session import get_session
 from .draft import get_best_available
 from .keeper import compute_keeper_candidates
+from .power_rankings import compute_power_rankings
+from .roster_analysis import STANDARD_POSITIONS
 from .sync import sync_all, sync_rankings_all
 from .trade import evaluate_trade
 
@@ -62,28 +65,30 @@ def league() -> None:
 
 
 @app.command()
-def rosters() -> None:
-    """Show each roster's owner and player count."""
+def rosters(
+    detail: bool = typer.Option(False, "--detail", help="Also show each team's best starting lineup."),
+) -> None:
+    """Rank every team 1-N by starting-lineup strength (live FantasyPros rankings), with a
+    QB/RB/WR/TE positional breakdown showing where each team is strong or thin."""
     with get_session() as session:
-        league_record = session.get(LeagueRecord, settings.sleeper_league_id)
-        if league_record is None:
-            typer.echo("No cached league data — run `fantasy-agent sync` first.")
-            raise typer.Exit(code=1)
+        try:
+            teams = compute_power_rankings(session)
+        except RuntimeError as exc:
+            typer.echo(str(exc))
+            raise typer.Exit(code=1) from exc
 
-        users_by_id = {
-            u.user_id: u
-            for u in session.query(UserRecord).filter_by(league_id=settings.sleeper_league_id).all()
-        }
-        roster_records = (
-            session.query(RosterRecord)
-            .filter_by(league_id=settings.sleeper_league_id)
-            .order_by(RosterRecord.roster_id)
-            .all()
-        )
-        for roster in roster_records:
-            owner = users_by_id.get(roster.owner_id)
-            owner_label = owner.team_name if owner else "(no owner)"
-            typer.echo(f"#{roster.roster_id:>2}  {owner_label:<25} players={len(roster.players)}")
+        for team in teams:
+            avg = f"#{team.average_starter_rank:.0f}" if team.average_starter_rank is not None else "n/a"
+            positional = "  ".join(f"{pos}:#{team.positional_rank[pos]}" for pos in STANDARD_POSITIONS)
+            typer.echo(
+                f"{team.rank:>2}. {team.team_name:<24} power={team.starting_lineup_value:>6.0f}  "
+                f"avg starter rank {avg:<5}  {positional}"
+            )
+            if detail:
+                for slot in team.starters:
+                    label = slot.name or "(empty)"
+                    rank_label = f"#{slot.rank_ecr}" if slot.rank_ecr is not None else "unranked"
+                    typer.echo(f"      {slot.slot:<11} {label:<25} {rank_label}")
 
 
 @app.command()

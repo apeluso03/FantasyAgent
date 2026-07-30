@@ -19,7 +19,9 @@ from ..config import settings
 from ..db.models import LeagueRecord, PlayerRecord, RankingRecord, RosterRecord, UserRecord
 from ..draft import get_best_available as _get_best_available_pipeline
 from ..keeper import compute_keeper_candidates
+from ..power_rankings import compute_power_rankings as _compute_power_rankings_pipeline
 from ..rankings.matching import normalize_name
+from ..roster_analysis import STANDARD_POSITIONS
 from ..trade import evaluate_trade as _evaluate_trade_pipeline
 
 
@@ -284,6 +286,27 @@ def _tool_get_best_available(session: Session, team: str | None = None, limit: i
     }
 
 
+def _tool_get_power_rankings(session: Session, **_: Any) -> dict:
+    try:
+        teams = _compute_power_rankings_pipeline(session)
+    except RuntimeError as exc:
+        raise ToolError(str(exc)) from exc
+    return {
+        "rankings": [
+            {
+                "rank": t.rank,
+                "team": t.team_name,
+                "starting_lineup_value": round(t.starting_lineup_value, 1),
+                "average_starter_rank": (
+                    round(t.average_starter_rank, 1) if t.average_starter_rank is not None else None
+                ),
+                "positional_rank": {pos: t.positional_rank[pos] for pos in STANDARD_POSITIONS},
+            }
+            for t in teams
+        ]
+    }
+
+
 TOOL_SCHEMAS: list[dict] = [
     {
         "name": "get_league_info",
@@ -384,6 +407,15 @@ TOOL_SCHEMAS: list[dict] = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "get_power_rankings",
+        "description": (
+            "Rank every team 1-N by best-possible-starting-lineup value (live FantasyPros rankings), "
+            "plus each team's QB/RB/WR/TE positional rank among the league -- use this to answer "
+            "questions about how teams compare, or where a team is strong or thin by position."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
 ]
 
 TOOL_HANDLERS: dict[str, Callable[..., dict]] = {
@@ -394,5 +426,6 @@ TOOL_HANDLERS: dict[str, Callable[..., dict]] = {
     "get_rankings": _tool_get_rankings,
     "get_keeper_candidates": _tool_get_keeper_candidates,
     "get_best_available": _tool_get_best_available,
+    "get_power_rankings": _tool_get_power_rankings,
     "evaluate_trade": _tool_evaluate_trade,
 }
