@@ -1,6 +1,6 @@
 """Tools exposed to the agent's tool-calling loop.
 
-Each tool pairs a JSON schema (what Claude sees) with a handler that takes the
+Each tool pairs a JSON schema (what the model sees) with a handler that takes the
 open DB session plus the tool's parsed input and returns a JSON-serializable
 dict. Keeping tool outputs structured — not prose — lets the agent reason
 over them directly rather than re-parsing text, per the spec's agent design
@@ -26,7 +26,7 @@ from ..trade import evaluate_trade as _evaluate_trade_pipeline
 
 
 class ToolError(RuntimeError):
-    """Raised by a tool handler; the message is sent back to Claude as a tool_result error."""
+    """Raised by a tool handler; the message is sent back to the model as a function_call_output."""
 
 
 def _league_id() -> str:
@@ -307,21 +307,28 @@ def _tool_get_power_rankings(session: Session, **_: Any) -> dict:
     }
 
 
+def _tool(name: str, description: str, parameters: dict) -> dict:
+    """Build a tool definition in the OpenAI Responses API's flat function-tool
+    shape: {type, name, description, parameters} at the top level (not nested
+    under a "function" key the way the older Chat Completions API does it)."""
+    return {"type": "function", "name": name, "description": description, "parameters": parameters}
+
+
 TOOL_SCHEMAS: list[dict] = [
-    {
-        "name": "get_league_info",
-        "description": "Get this league's settings: scoring, roster positions, keeper rules, trade deadline.",
-        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
-    },
-    {
-        "name": "list_rosters",
-        "description": "List every team in the league with its record and position counts, to compare team needs.",
-        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
-    },
-    {
-        "name": "search_player",
-        "description": "Look up a player's Sleeper player_id and info by (partial) name.",
-        "input_schema": {
+    _tool(
+        "get_league_info",
+        "Get this league's settings: scoring, roster positions, keeper rules, trade deadline.",
+        {"type": "object", "properties": {}, "additionalProperties": False},
+    ),
+    _tool(
+        "list_rosters",
+        "List every team in the league with its record and position counts, to compare team needs.",
+        {"type": "object", "properties": {}, "additionalProperties": False},
+    ),
+    _tool(
+        "search_player",
+        "Look up a player's Sleeper player_id and info by (partial) name.",
+        {
             "type": "object",
             "properties": {
                 "name": {"type": "string", "description": "Player name or partial name"},
@@ -330,11 +337,11 @@ TOOL_SCHEMAS: list[dict] = [
             "required": ["name"],
             "additionalProperties": False,
         },
-    },
-    {
-        "name": "get_roster",
-        "description": "Get a specific team's full roster with each player's current FantasyPros rank.",
-        "input_schema": {
+    ),
+    _tool(
+        "get_roster",
+        "Get a specific team's full roster with each player's current FantasyPros rank.",
+        {
             "type": "object",
             "properties": {
                 "team": {"type": "string", "description": "Team name or owner display name (partial match ok)"}
@@ -342,11 +349,11 @@ TOOL_SCHEMAS: list[dict] = [
             "required": ["team"],
             "additionalProperties": False,
         },
-    },
-    {
-        "name": "get_rankings",
-        "description": "Get cached FantasyPros dynasty/superflex rankings, optionally filtered by position or name search.",
-        "input_schema": {
+    ),
+    _tool(
+        "get_rankings",
+        "Get cached FantasyPros dynasty/superflex rankings, optionally filtered by position or name search.",
+        {
             "type": "object",
             "properties": {
                 "position": {"type": "string", "description": "e.g. QB, RB, WR, TE, K, DEF"},
@@ -355,23 +362,23 @@ TOOL_SCHEMAS: list[dict] = [
             },
             "additionalProperties": False,
         },
-    },
-    {
-        "name": "get_keeper_candidates",
-        "description": (
+    ),
+    _tool(
+        "get_keeper_candidates",
+        (
             "Rank a team's roster by keeper value (cost round vs. expected value at that draft slot). "
             "Defaults to your team if `team` is omitted."
         ),
-        "input_schema": {
+        {
             "type": "object",
             "properties": {"team": {"type": "string", "description": "Team name (defaults to your team)"}},
             "additionalProperties": False,
         },
-    },
-    {
-        "name": "evaluate_trade",
-        "description": "Evaluate a proposed trade between two teams: value swing and roster-need impact for both sides.",
-        "input_schema": {
+    ),
+    _tool(
+        "evaluate_trade",
+        "Evaluate a proposed trade between two teams: value swing and roster-need impact for both sides.",
+        {
             "type": "object",
             "properties": {
                 "team_a": {"type": "string", "description": "First team's name"},
@@ -390,15 +397,15 @@ TOOL_SCHEMAS: list[dict] = [
             "required": ["team_a", "team_a_gives", "team_b", "team_b_gives"],
             "additionalProperties": False,
         },
-    },
-    {
-        "name": "get_best_available",
-        "description": (
+    ),
+    _tool(
+        "get_best_available",
+        (
             "During a live draft: get the best available players not yet drafted (polled live from "
             "Sleeper) and not already on the roster, ranked by value with roster-need context for each. "
             "Defaults to your team if `team` is omitted."
         ),
-        "input_schema": {
+        {
             "type": "object",
             "properties": {
                 "team": {"type": "string", "description": "Team name (defaults to your team)"},
@@ -406,16 +413,16 @@ TOOL_SCHEMAS: list[dict] = [
             },
             "additionalProperties": False,
         },
-    },
-    {
-        "name": "get_power_rankings",
-        "description": (
+    ),
+    _tool(
+        "get_power_rankings",
+        (
             "Rank every team 1-N by best-possible-starting-lineup value (live FantasyPros rankings), "
             "plus each team's QB/RB/WR/TE positional rank among the league -- use this to answer "
             "questions about how teams compare, or where a team is strong or thin by position."
         ),
-        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
-    },
+        {"type": "object", "properties": {}, "additionalProperties": False},
+    ),
 ]
 
 TOOL_HANDLERS: dict[str, Callable[..., dict]] = {

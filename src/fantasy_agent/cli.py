@@ -254,9 +254,9 @@ def trade(
 @app.command()
 def ask(
     question: str = typer.Argument(..., help="A keeper/trade/roster question in plain English."),
-    model: str = typer.Option(None, help="Override the default Claude model."),
+    model: str = typer.Option(None, help="Override the default model."),
 ) -> None:
-    """Ask the Claude tool-calling agent a question, grounded in the local cache.
+    """Ask the tool-calling agent a question, grounded in the local cache.
 
     Tool calls and their results are logged as they happen (root logger is INFO
     by default) -- this is the "here's how it thinks" trace, not just the answer.

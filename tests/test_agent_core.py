@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -6,73 +7,87 @@ from fantasy_agent.agent import core
 from fantasy_agent.config import settings
 
 
-class FakeTextBlock:
-    type = "text"
+class FakeMessageItem:
+    type = "message"
 
     def __init__(self, text: str) -> None:
         self.text = text
 
 
-class FakeToolUseBlock:
-    type = "tool_use"
+class FakeFunctionCallItem:
+    type = "function_call"
 
-    def __init__(self, name: str, input: dict, id: str = "tool_1") -> None:
+    def __init__(self, name: str, arguments: dict, call_id: str = "call_1") -> None:
         self.name = name
-        self.input = input
-        self.id = id
+        self.arguments = json.dumps(arguments)
+        self.call_id = call_id
 
 
 class FakeUsage:
     def __init__(
-        self, input_tokens: int = 10, output_tokens: int = 5,
-        cache_read_input_tokens: int = 0, cache_creation_input_tokens: int = 0,
+        self, input_tokens: int = 10, output_tokens: int = 5, cached_tokens: int = 0
     ) -> None:
         self.input_tokens = input_tokens
         self.output_tokens = output_tokens
-        self.cache_read_input_tokens = cache_read_input_tokens
-        self.cache_creation_input_tokens = cache_creation_input_tokens
+        self.input_tokens_details = SimpleNamespace(cached_tokens=cached_tokens)
 
 
 class FakeResponse:
-    def __init__(self, content: list, stop_reason: str) -> None:
-        self.content = content
-        self.stop_reason = stop_reason
+    def __init__(self, output: list, output_text: str = "") -> None:
+        self.output = output
+        self.output_text = output_text
         self.usage = FakeUsage()
 
 
-class FakeMessages:
+class FakeResponses:
     def __init__(self, responses: list[FakeResponse]) -> None:
         self._responses = list(responses)
         self.calls: list[dict] = []
 
     def create(self, **kwargs):
-        self.calls.append(kwargs)
+        # run_agent mutates the same `input_list` object across loop iterations,
+        # so snapshot it now -- otherwise every recorded call ends up pointing at
+        # whatever the list looks like by the time run_agent() returns.
+        snapshot = {**kwargs, "input": list(kwargs["input"])}
+        self.calls.append(snapshot)
         return self._responses.pop(0)
 
 
-class FakeAnthropicClient:
+class FakeOpenAIClient:
     def __init__(self, responses: list[FakeResponse], **_kwargs) -> None:
-        self.messages = FakeMessages(responses)
+        self.responses = FakeResponses(responses)
 
 
 @pytest.fixture(autouse=True)
 def _api_key(monkeypatch):
-    monkeypatch.setattr(settings, "anthropic_api_key", "test-key")
+    monkeypatch.setattr(settings, "openai_api_key", "test-key")
 
 
-def _patch_client(monkeypatch, responses: list[FakeResponse]) -> FakeAnthropicClient:
-    client = FakeAnthropicClient(responses)
-    monkeypatch.setattr(core.anthropic, "Anthropic", lambda **_kwargs: client)
+def _patch_client(monkeypatch, responses: list[FakeResponse]) -> FakeOpenAIClient:
+    client = FakeOpenAIClient(responses)
+    monkeypatch.setattr(core, "OpenAI", lambda **_kwargs: client)
     return client
 
 
 def test_run_agent_returns_text_when_no_tool_use(monkeypatch):
-    responses = [FakeResponse([FakeTextBlock("Keep Bijan.")], "end_turn")]
+    responses = [FakeResponse([FakeMessageItem("Keep Bijan.")], output_text="Keep Bijan.")]
     _patch_client(monkeypatch, responses)
 
     answer = core.run_agent("who should I keep?", session=object())
 
     assert answer == "Keep Bijan."
+
+
+def test_first_request_passes_instructions_and_tools(monkeypatch):
+    responses = [FakeResponse([], output_text="Keep Bijan.")]
+    client = _patch_client(monkeypatch, responses)
+
+    core.run_agent("who should I keep?", session=object())
+
+    call = client.responses.calls[0]
+    assert call["instructions"] == core.SYSTEM_PROMPT
+    assert call["tools"] == core.TOOL_SCHEMAS
+    assert call["input"] == [{"role": "user", "content": "who should I keep?"}]
 
 
 def test_run_agent_executes_tool_and_feeds_result_back(monkeypatch):
@@ -85,8 +100,8 @@ def test_run_agent_executes_tool_and_feeds_result_back(monkeypatch):
     monkeypatch.setitem(core.TOOL_HANDLERS, "get_league_info", fake_handler)
 
     responses = [
-        FakeResponse([FakeToolUseBlock("get_league_info", {})], "tool_use"),
-        FakeResponse([FakeTextBlock("Here's your answer.")], "end_turn"),
+        FakeResponse([FakeFunctionCallItem("get_league_info", {}, call_id="call_1")], output_text=""),
+        FakeResponse([FakeMessageItem("Here's your answer.")], output_text="Here's your answer."),
     ]
     client = _patch_client(monkeypatch, responses)
 
@@ -94,12 +109,14 @@ def test_run_agent_executes_tool_and_feeds_result_back(monkeypatch):
 
     assert answer == "Here's your answer."
     assert calls == [{}]
-    # second request must carry the tool_result back to Claude
-    second_call_messages = client.messages.calls[1]["messages"]
-    tool_result_message = second_call_messages[-1]
-    assert tool_result_message["role"] == "user"
-    assert tool_result_message["content"][0]["type"] == "tool_result"
-    assert tool_result_message["content"][0]["is_error"] is False
+    # second request must carry the function's output back, keyed by call_id
+    second_call_input = client.responses.calls[1]["input"]
+    tool_output_item = second_call_input[-1]
+    assert tool_output_item == {
+        "type": "function_call_output",
+        "call_id": "call_1",
+        "output": json.dumps({"ok": True}),
+    }
 
 
 def test_run_agent_reports_tool_error_without_crashing(monkeypatch):
@@ -109,26 +126,39 @@ def test_run_agent_reports_tool_error_without_crashing(monkeypatch):
     monkeypatch.setitem(core.TOOL_HANDLERS, "get_roster", failing_handler)
 
     responses = [
-        FakeResponse([FakeToolUseBlock("get_roster", {"team": "Nobody"})], "tool_use"),
-        FakeResponse([FakeTextBlock("I couldn't find that team.")], "end_turn"),
+        FakeResponse([FakeFunctionCallItem("get_roster", {"team": "Nobody"})], output_text=""),
+        FakeResponse([FakeMessageItem("I couldn't find that team.")], output_text="I couldn't find that team."),
     ]
     client = _patch_client(monkeypatch, responses)
 
     answer = core.run_agent("show me Nobody's roster", session=object())
 
     assert answer == "I couldn't find that team."
-    tool_result = client.messages.calls[1]["messages"][-1]["content"][0]
-    assert tool_result["is_error"] is True
-    assert "no team matches" in tool_result["content"]
+    tool_output_item = client.responses.calls[1]["input"][-1]
+    assert tool_output_item["type"] == "function_call_output"
+    assert "Error:" in tool_output_item["output"]
+    assert "no team matches" in tool_output_item["output"]
+
+
+def test_run_agent_reports_unknown_tool_without_crashing(monkeypatch):
+    responses = [
+        FakeResponse([FakeFunctionCallItem("not_a_real_tool", {})], output_text=""),
+        FakeResponse([FakeMessageItem("done")], output_text="done"),
+    ]
+    _patch_client(monkeypatch, responses)
+
+    answer = core.run_agent("do the impossible", session=object())
+
+    assert answer == "done"
 
 
 def test_run_agent_stops_after_max_iterations(monkeypatch):
     monkeypatch.setitem(
         core.TOOL_HANDLERS, "get_league_info", lambda session, **kwargs: {"ok": True}
     )
-    # Always asks for another tool call -- never returns end_turn.
+    # Always asks for another tool call -- never returns a final message.
     responses = [
-        FakeResponse([FakeToolUseBlock("get_league_info", {})], "tool_use")
+        FakeResponse([FakeFunctionCallItem("get_league_info", {})], output_text="")
         for _ in range(core.MAX_TOOL_ITERATIONS)
     ]
     _patch_client(monkeypatch, responses)
@@ -139,48 +169,20 @@ def test_run_agent_stops_after_max_iterations(monkeypatch):
 
 
 def test_run_agent_requires_api_key(monkeypatch):
-    monkeypatch.setattr(settings, "anthropic_api_key", None)
-    with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
+    monkeypatch.setattr(settings, "openai_api_key", None)
+    with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
         core.run_agent("anything", session=object())
 
 
-def test_system_prompt_is_cached():
-    assert core.SYSTEM_BLOCKS == [
-        {"type": "text", "text": core.SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}
-    ]
+def test_usage_logging_tolerates_missing_cache_details(monkeypatch, caplog):
+    """usage.input_tokens_details can be absent on some responses -- logging
+    must not crash, just log 0 cached tokens."""
+    response = FakeResponse([], output_text="ok")
+    response.usage.input_tokens_details = None
+    _patch_client(monkeypatch, [response])
 
+    with caplog.at_level("INFO", logger="fantasy_agent.agent.core"):
+        answer = core.run_agent("anything", session=object())
 
-def test_first_request_marks_the_question_as_a_cache_breakpoint(monkeypatch):
-    responses = [FakeResponse([FakeTextBlock("Keep Bijan.")], "end_turn")]
-    client = _patch_client(monkeypatch, responses)
-
-    core.run_agent("who should I keep?", session=object())
-
-    sent_messages = client.messages.calls[0]["messages"]
-    assert sent_messages[0]["content"] == [
-        {"type": "text", "text": "who should I keep?", "cache_control": {"type": "ephemeral"}}
-    ]
-    assert client.messages.calls[0]["system"] == core.SYSTEM_BLOCKS
-
-
-def test_cache_breakpoint_moves_forward_instead_of_accumulating(monkeypatch):
-    monkeypatch.setitem(
-        core.TOOL_HANDLERS, "get_league_info", lambda session, **kwargs: {"ok": True}
-    )
-    responses = [
-        FakeResponse([FakeToolUseBlock("get_league_info", {})], "tool_use"),
-        FakeResponse([FakeTextBlock("Done.")], "end_turn"),
-    ]
-    client = _patch_client(monkeypatch, responses)
-
-    core.run_agent("what are the league rules?", session=object())
-
-    # On the second request, only the newest (last) message's last block should
-    # carry a breakpoint -- the first message's must have been cleared, not left
-    # in place (that would eventually exceed the 4-breakpoints-per-request cap).
-    second_call_messages = client.messages.calls[1]["messages"]
-    first_msg_content = second_call_messages[0]["content"]
-    assert "cache_control" not in first_msg_content[0]
-
-    last_msg_content = second_call_messages[-1]["content"]
-    assert last_msg_content[-1]["cache_control"] == {"type": "ephemeral"}
+    assert answer == "ok"
+    assert any("cached=0" in record.message for record in caplog.records)

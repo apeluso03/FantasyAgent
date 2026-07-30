@@ -3,7 +3,8 @@
 An AI agent that helps manage a 12-team PPR superflex keeper league on Sleeper. It answers
 questions like "should I keep Bijan or draft fresh," "is this trade fair," and "who's the best
 player available right now" by pulling live league/player data and reasoning over it with
-Claude's tool-calling — not a static value chart, and not a chatbot wrapper.
+GPT-5.6 Luna's tool-calling (OpenAI's Responses API) — not a static value chart, and not a
+chatbot wrapper.
 
 See [fantasy-agent-spec.md](fantasy-agent-spec.md) for the original project spec.
 
@@ -14,7 +15,7 @@ MVP complete, following the spec's build order:
 1. Sleeper API integration + local cache (league, rosters, users, players, draft history)
 2. FantasyPros rankings scraper + player-ID matching
 3. Keeper decision logic + trade analyzer (validated as pure data pipelines, no LLM)
-4. Claude tool-calling agent wired to the above
+4. GPT-5.6 Luna tool-calling agent wired to the above
 5. Draft-day best-available assistant (live-polled, superflex-aware)
 
 ## Setup
@@ -26,7 +27,7 @@ pip install -e ".[dev]"
 cp .env.example .env            # defaults already point at the real league
 ```
 
-`ANTHROPIC_API_KEY` in `.env` is only required for `fantasy-agent ask`. Every other command
+`OPENAI_API_KEY` in `.env` is only required for `fantasy-agent ask`. Every other command
 works against the local cache with no API key.
 
 ## Usage
@@ -95,7 +96,7 @@ pay that extraction cost. `--onedir` runs directly from disk with no such penalt
                     You (CLI: ask "...")
                              |
                     Agent core (agent/core.py)
-                    Claude + a manual tool-calling loop
+                    GPT-5.6 Luna + a manual tool-calling loop
                  -----------------------------------
                  |           |            |         |
           Sleeper cache  Rankings    Keeper/Trade  Live draft
@@ -108,29 +109,42 @@ pay that extraction cost. `--onedir` runs directly from disk with no such penalt
                     SQLite (data/fantasy_agent.db)
 ```
 
-The agent doesn't do one API call and hand it to Claude — `agent/core.py` runs an explicit
-`while stop_reason == "tool_use"` loop (see "Why a manual loop" below). Claude decides which of
-the 9 tools in `agent/tools.py` it needs for a given question, the handler runs against the
-local cache (or, for `get_best_available`, a live Sleeper call), and the result goes back to
-Claude to reason over — possibly triggering more tool calls — before it answers. Every tool call
-and result is logged (`INFO fantasy_agent.agent.core`), which is both a debugging aid and the
-"here's how it thinks" trace worth showing in an interview.
+The agent doesn't do one API call and hand it to the model — `agent/core.py` runs an explicit
+loop against OpenAI's Responses API (`client.responses.create`), feeding each round's output back
+in as input until the model stops requesting tools (see "Why a manual loop" below). The model
+decides which of the 9 tools in `agent/tools.py` it needs for a given question, the handler runs
+against the local cache (or, for `get_best_available`, a live Sleeper call), and the result goes
+back as a `function_call_output` for the model to reason over — possibly triggering more tool
+calls — before it answers. Every tool call and result is logged (`INFO fantasy_agent.agent.core`),
+which is both a debugging aid and the "here's how it thinks" trace worth showing in an interview.
 
-### Why a manual tool-calling loop, not the SDK's tool runner
+### Why a manual tool-calling loop
 
-The Anthropic SDK ships a beta `tool_runner` that abstracts the request → execute → loop cycle.
-This project uses a hand-written loop instead, on purpose: the point of this build is the
-agentic tool-selection logic itself, and a manual loop keeps every tool call, its input, and its
-result directly visible and logged rather than hidden inside SDK internals.
+This project is deliberately hand-rolled rather than reaching for a higher-level agent-loop
+helper: the point of the build is the agentic tool-selection logic itself, and a manual loop
+keeps every tool call, its input, and its result directly visible and logged rather than hidden
+inside SDK internals.
 
 ### Why keeper/trade/draft logic is *not* LLM calls
 
 Per the build order, `keeper.py`, `trade.py`, and `draft.py` are plain Python functions —
 deterministic, unit-tested, and validated against the real league *before* any LLM was wired in.
-Claude's job is to decide *when* to call them and to explain the result in context, not to
+The model's job is to decide *when* to call them and to explain the result in context, not to
 recompute a keeper cost or trade value itself (which an LLM would do inconsistently and
 unverifiably). This split — deterministic pipeline underneath, LLM for tool selection and
 explanation on top — is the core design decision of the project.
+
+### Note on provider
+
+The agent originally ran on Claude (Anthropic's Messages API); it was later switched to OpenAI's
+Responses API (`gpt-5.6-luna`). The swap only touched `agent/core.py` (the request/response loop
+mechanics) and the tool-schema shape in `agent/tools.py` (Claude's `{name, description,
+input_schema}` vs. the Responses API's flat `{type: "function", name, description, parameters}`)
+— every tool *handler*, and all of `keeper.py`/`trade.py`/`draft.py`/`power_rankings.py`, needed
+zero changes, since those never import a provider SDK at all. One functional difference worth
+knowing: Claude's Messages API needed explicit `cache_control` breakpoints to get prompt-caching
+discounts; the Responses API prices repeated prefixes at a discounted "cached input" rate
+automatically, so there's no client-side cache bookkeeping to do here.
 
 ### Data sources and caching
 
@@ -195,9 +209,9 @@ so power rankings and trade values stay on one consistent scale.
 pytest
 ```
 
-All 55 tests are offline — Sleeper and FantasyPros HTTP calls are mocked with
-`httpx.MockTransport`, and the Anthropic client is mocked in `test_agent_core.py` (fake
-`stop_reason`/tool_use responses), so the suite needs no network access, API key, or live league.
+All 65 tests are offline — Sleeper and FantasyPros HTTP calls are mocked with
+`httpx.MockTransport`, and the OpenAI client is mocked in `test_agent_core.py` (fake Responses
+API `output`/`function_call` objects), so the suite needs no network access, API key, or live league.
 Keeper/trade/draft logic is additionally validated against the real league's live data during
 development (see commit history / session notes) — sane, explainable output on real rosters is
 the actual bar per the spec, not just green tests.
@@ -217,7 +231,7 @@ src/fantasy_agent/
   draft.py             # live best-available draft assistant (pure, no LLM)
   power_rankings.py    # league-wide power rankings + positional breakdown (pure, no LLM)
   agent/
-    tools.py           # tool schemas + handlers exposed to Claude
+    tools.py           # tool schemas + handlers exposed to the model
     core.py            # the manual tool-calling loop
   cli.py                # `fantasy-agent` entrypoint
   gui.py                # Tkinter desktop launcher

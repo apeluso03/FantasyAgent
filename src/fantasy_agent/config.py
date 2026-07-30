@@ -26,10 +26,10 @@ class Settings(BaseSettings):
     )
     rankings_cache_ttl_hours: int = 20
 
-    # Agent (Claude tool-calling loop). API key only required when `fantasy-agent ask` runs.
-    anthropic_api_key: str | None = None
-    anthropic_model: str = "claude-haiku-4-5"
-    anthropic_max_tokens: int = 4096
+    # Agent (OpenAI Responses API tool-calling loop). API key only required when
+    # `fantasy-agent ask` runs.
+    openai_api_key: str | None = None
+    openai_model: str = "gpt-5.6-luna"
 
 
 settings = Settings()
