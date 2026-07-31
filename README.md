@@ -17,6 +17,7 @@ MVP complete, following the spec's build order:
 3. Keeper decision logic + trade analyzer (validated as pure data pipelines, no LLM)
 4. GPT-5.6 Luna tool-calling agent wired to the above
 5. Draft-day best-available assistant (live-polled, superflex-aware)
+6. Two desktop GUI editions — a dev build and a polished user edition (see below)
 
 ## Setup
 
@@ -63,32 +64,86 @@ way, on `RANKINGS_CACHE_TTL_HOURS`. The agent never scrapes or hits Sleeper live
 — with one deliberate exception: `best-available` polls the draft endpoint fresh on every call,
 because "who's been picked" can't be allowed to go stale during a live draft.
 
-## Desktop GUI
+## Desktop GUIs — two editions
 
-A small dark-themed Tkinter launcher (`gui.py`) wraps the CLI for point-and-click use — quick
-buttons for `sync`/`keepers`/`best-available`/etc., a text box for `ask`, and a live output panel.
-No separate install: it's the same `fantasy_agent` package.
+There are two Tkinter front ends over the same `fantasy_agent` package, aimed at two different
+audiences. **Any GUI-relevant change should land in both** — see "Shared GUI code" below for how
+that's kept sane.
+
+| | Dev build (`gui.py`) | User edition (`gui_user.py`) |
+|---|---|---|
+| Audience | You, developing/debugging | Anyone — a friend, a different league, a different person entirely |
+| Config | `.env` in the repo (checked-out, one league) | A setup wizard on first launch, saved to `%APPDATA%\FantasyAgent\config.json` (any league, any machine) |
+| Chat view | Raw output pane — every tool call and its result, logged | Clean chat bubbles, no visible tool-call trace — just the answer |
+| Tabs | Console (quick actions + `ask` + raw output), My Roster, Power Rankings, Best Available | Chat, My Roster, Power Rankings, Best Available |
+| Accent color | Terracotta (`ACCENT`, `#D97757`) | Celadon / Hunter Green (`#A1CCA5` / `#415D43`) |
+| Platforms | Sleeper only | Sleeper (live); ESPN and Yahoo shown as "coming soon" — see below |
+
+### Dev build
 
 ```bash
 ./run_gui.bat          # double-click, or run from a shell -- launches with the venv's pythonw
 ```
 
+### User edition
+
+```bash
+./run_gui_user.bat
+```
+
+First launch shows a setup screen: pick a platform (Sleeper today), enter a league ID and your
+Sleeper username, paste an OpenAI API key. It resolves your username to a Sleeper user ID, syncs
+the league, and saves everything to `%APPDATA%\FantasyAgent\config.json` — nothing is read from
+`.env`. This means the dev build (pointed at your league via `.env`) and the user edition (pointed
+at anyone's league) can run side by side on the same machine without clobbering each other's cache
+or settings; each gets its own SQLite database under its own config root. A gear icon in the
+header reopens the setup screen, prefilled, to change league/key later.
+
+**ESPN and Yahoo are scaffolded, not implemented.** The platform picker, `UserConfig.platform`,
+and `user_config.ALL_PLATFORMS` all model three platforms; `user_config.IMPLEMENTED_PLATFORMS`
+is just `("sleeper",)` today, and the ESPN/Yahoo radio buttons are disabled with a "coming soon"
+label. They weren't stubbed further than that because both need real, untestable auth flows —
+ESPN via session cookies pulled from a logged-in browser, Yahoo via a registered OAuth2 app — and
+faking that integration without real credentials to validate against isn't something worth doing.
+Adding a real platform later means: an API client under `<platform>/` mirroring `sleeper/client.py`,
+a `sync_all()` branch, and flipping it into `IMPLEMENTED_PLATFORMS`.
+
+### Shared GUI code
+
+- `gui_theme.py` — one palette, one `ttk.Style` builder. `build_style()` is the dev build's
+  terracotta look; `build_style_user()` calls it and recolors the same style *names*
+  (`Accent.TButton`, `Tab.TButton`/`TabActive.TButton`, `Minimal.Vertical.TScrollbar`) to Celadon/
+  Hunter Green — layouts and fonts are defined once, only colors differ between editions.
+- `gui_screens.py` — the three read-only data tabs (`RosterScreen`, `PowerRankingsScreen`,
+  `BestAvailableScreen`), each taking an `accent` color so both editions render the exact same
+  widgets. `RosterScreen` fetches each player's headshot via `player_images.py` (cached to disk
+  after first fetch — see below) and draws it as a circular thumbnail with Pillow; players with no
+  photo (kickers, DEF, some rookies) get a circular initial-letter placeholder instead.
+- `my_roster.py` / `power_rankings.py` / `draft.py` — the pure data pipelines both GUIs' tabs read
+  from; no GUI code lives in these.
+
 ### Standalone .exe (no Python/venv required to run)
 
 ```bash
 pip install -e ".[build]"     # PyInstaller + hook contrib, one-time
-./build_exe.bat                # or: .venv\Scripts\pyinstaller.exe FantasyAgent.spec
+
+./build_exe.bat                                          # dev build -> dist/FantasyAgent/
+.venv\Scripts\pyinstaller.exe FantasyAgentUser.spec       # user edition -> dist/FantasyAgentUser/
 ```
 
-Produces `dist/FantasyAgent/FantasyAgent.exe` plus a supporting `_internal/` folder — keep them
-together (it's a folder-based build, not a single portable file; see below for why). Copy your
-`.env` into `dist/FantasyAgent/` alongside the exe before running.
+Each produces its own `dist/<Name>/<Name>.exe` plus a supporting `_internal/` folder — keep them
+together (folder-based builds, not single portable files; see below for why). Copy your `.env`
+into `dist/FantasyAgent/` alongside the dev build's exe before running it. The user edition needs
+no `.env` at all — its setup wizard runs on first launch exactly like the dev-mode version does.
 
-**Why `--onedir`, not `--onefile`.** The GUI runs every command (`sync`, `ask`, ...) by launching
-itself again as a subprocess with CLI arguments — `launcher.py` dispatches on `sys.argv` to decide
-whether a given launch is "open the GUI" or "run the CLI." A `--onefile` build re-extracts its
-entire bundle to a temp directory on *every* launch, which would make every single button click
-pay that extraction cost. `--onedir` runs directly from disk with no such penalty.
+**Why `--onedir`, not `--onefile`.** The dev build runs every command (`sync`, `ask`, ...) by
+launching itself again as a subprocess with CLI arguments — `launcher.py` dispatches on
+`sys.argv` to decide whether a given launch is "open the GUI" or "run the CLI." A `--onefile`
+build re-extracts its entire bundle to a temp directory on *every* launch, which would make every
+single button click pay that extraction cost. `--onedir` runs directly from disk with no such
+penalty. (The user edition's `launcher_user.py` never shells out to a subprocess — it calls
+`run_agent()` and the sync/data functions in-process — but it's built the same way for consistency
+and so both exes behave identically operationally.)
 
 ## Architecture
 
@@ -209,7 +264,7 @@ so power rankings and trade values stay on one consistent scale.
 pytest
 ```
 
-All 65 tests are offline — Sleeper and FantasyPros HTTP calls are mocked with
+All tests are offline — Sleeper and FantasyPros HTTP calls are mocked with
 `httpx.MockTransport`, and the OpenAI client is mocked in `test_agent_core.py` (fake Responses
 API `output`/`function_call` objects), so the suite needs no network access, API key, or live league.
 Keeper/trade/draft logic is additionally validated against the real league's live data during
@@ -220,12 +275,17 @@ the actual bar per the spec, not just green tests.
 
 ```
 src/fantasy_agent/
-  config.py           # env-based settings
+  config.py           # env-based settings (dev build); loosened defaults so the user
+                       #   edition can override everything at runtime via user_config.py
+  user_config.py       # user edition's per-user config: %APPDATA%\FantasyAgent, platform enum
   sleeper/             # Sleeper API client + response schemas
   rankings/            # FantasyPros scraper, player-ID matching, response schemas
-  db/                  # SQLAlchemy models + session (SQLite cache)
+  db/                  # SQLAlchemy models + session (SQLite cache; lazily initialized so the
+                       #   user edition can point it at a per-user DB path before first use)
   sync.py              # pulls Sleeper + FantasyPros data into the local cache
   roster_analysis.py    # shared position-count/need helpers (trade.py + draft.py + power_rankings.py)
+  my_roster.py          # full single-team roster view (starters/bench/IR/taxi) -- My Roster tab
+  player_images.py      # Sleeper headshot fetch + on-disk cache, used by gui_screens.RosterScreen
   keeper.py            # keeper decision logic (pure, no LLM)
   trade.py             # trade analyzer (pure, no LLM)
   draft.py             # live best-available draft assistant (pure, no LLM)
@@ -234,14 +294,20 @@ src/fantasy_agent/
     tools.py           # tool schemas + handlers exposed to the model
     core.py            # the manual tool-calling loop
   cli.py                # `fantasy-agent` entrypoint
-  gui.py                # Tkinter desktop launcher
+  gui_theme.py          # shared palette + ttk.Style builder for both GUI editions
+  gui_screens.py        # shared My Roster / Power Rankings / Best Available tab widgets
+  gui.py                # dev-build Tkinter GUI (Console + shared data tabs)
+  gui_user.py           # user-edition Tkinter GUI (setup wizard + Chat + shared data tabs)
 tests/
 assets/
   icon.ico              # app icon (scripts/make_icon.py regenerates it)
-launcher.py              # PyInstaller entry point (dispatches to CLI or GUI)
-FantasyAgent.spec        # PyInstaller build config
-run_gui.bat               # double-click launcher (dev mode, uses the venv)
-build_exe.bat             # builds the standalone .exe
+launcher.py              # PyInstaller entry point for the dev build (dispatches to CLI or GUI)
+launcher_user.py         # PyInstaller entry point for the user edition (GUI only)
+FantasyAgent.spec        # PyInstaller build config -- dev build
+FantasyAgentUser.spec    # PyInstaller build config -- user edition
+run_gui.bat               # double-click launcher, dev build (dev mode, uses the venv)
+run_gui_user.bat          # double-click launcher, user edition (dev mode, uses the venv)
+build_exe.bat             # builds the standalone dev-build .exe
 ```
 
 ## Success criteria (from the spec)

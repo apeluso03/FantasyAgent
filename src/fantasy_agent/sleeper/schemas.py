@@ -13,6 +13,12 @@ def _none_to_empty_list(value: object) -> object:
     return [] if value is None else value
 
 
+def _none_to_empty_dict(value: object) -> object:
+    # The single-user lookup endpoint (/user/{username}) sends metadata: null,
+    # unlike the league-members endpoint which always has a metadata object.
+    return {} if value is None else value
+
+
 class League(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -36,6 +42,8 @@ class SleeperUser(BaseModel):
     user_id: str
     display_name: str | None = None
     metadata: dict = Field(default_factory=dict)
+
+    _coerce_metadata = field_validator("metadata", mode="before")(_none_to_empty_dict)
 
     @property
     def team_name(self) -> str:

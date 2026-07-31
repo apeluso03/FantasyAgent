@@ -1,8 +1,15 @@
-"""Minimal desktop launcher for the fantasy-agent CLI.
+"""Minimal desktop launcher for the fantasy-agent CLI -- the dev build.
 
 No venv activation needed: it shells out via `sys.executable`, which is
 already the venv's python when this is launched through run_gui.bat (or the
 standalone PyInstaller build -- see FantasyAgent.spec).
+
+Tabbed shell: the Console tab (quick actions, ask box, raw CLI output -- the
+"here's how it thinks" dev view) is built once and persists across tab
+switches so command history/spinner state survive; the My Roster/Power
+Rankings/Best Available tabs are the same shared read-only screens the user
+edition uses (gui_screens.py), just recolored to this build's terracotta
+accent -- see gui_theme.build_style() vs. build_style_user().
 """
 
 from __future__ import annotations
@@ -12,23 +19,24 @@ import subprocess
 import sys
 import threading
 import tkinter as tk
-from pathlib import Path
 from tkinter import ttk
 from tkinter.scrolledtext import ScrolledText
 
-MODULE = "fantasy_agent.cli"
+from .gui_screens import BestAvailableScreen, PowerRankingsScreen, RosterScreen
+from .gui_theme import (
+    ACCENT,
+    ACCENT_TEXT,
+    BG,
+    SURFACE,
+    SURFACE_ALT,
+    TEXT,
+    TEXT_MUTED,
+    build_style,
+    draw_yard_line,
+    set_window_icon,
+)
 
-# Dark palette in the spirit of Claude's chat window, with a football accent.
-BG = "#262624"
-SURFACE = "#30302E"
-SURFACE_ALT = "#3A3937"
-BORDER = "#45443F"
-TEXT = "#ECEBE4"
-TEXT_MUTED = "#A8A599"
-ACCENT = "#D97757"  # terracotta
-ACCENT_HOVER = "#C2684A"
-FIELD_GREEN = "#3A6B35"
-FIELD_GREEN_HOVER = "#4C8A45"
+MODULE = "fantasy_agent.cli"
 
 QUICK_ACTIONS = [
     ("Sync", ["sync"]),
@@ -39,13 +47,14 @@ QUICK_ACTIONS = [
     ("Rosters", ["rosters"]),
 ]
 
+TABS = [
+    ("console", "Console"),
+    ("roster", "My Roster"),
+    ("rankings", "Power Rankings"),
+    ("available", "Best Available"),
+]
+
 _DONE = object()
-
-
-def _resource_path(relative: str) -> Path:
-    """Resolve a bundled asset both in dev mode and inside a PyInstaller build."""
-    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent.parent))
-    return base / relative
 
 
 def _cli_command(args: list[str]) -> list[str]:
@@ -65,99 +74,72 @@ class FantasyAgentGUI:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         root.title("Fantasy Agent")
-        root.geometry("900x620")
-        root.minsize(680, 460)
+        root.geometry("900x680")
+        root.minsize(680, 480)
         root.configure(bg=BG)
-        self._set_icon()
+        set_window_icon(root)
 
         self._output_queue: "queue.Queue[object]" = queue.Queue()
         self._running = False
         self._buttons: list[ttk.Button] = []
         self._spinner_job: str | None = None
         self._spinner_frame = 0
+        self._current_key: str | None = None
+        self._tab_buttons: dict[str, ttk.Button] = {}
 
-        self._build_style()
-        self._build_widgets()
+        build_style(self.root)
+        self._build_shell()
+        self._console_frame = ttk.Frame(self._content)
+        self._build_console(self._console_frame)
+        self._select("console")
         self._poll_output_queue()
 
-    def _set_icon(self) -> None:
-        icon_path = _resource_path("assets/icon.ico")
-        if icon_path.exists():
-            try:
-                self.root.iconbitmap(default=str(icon_path))
-            except tk.TclError:
-                pass  # non-Windows or unsupported format -- cosmetic only
-
-    def _build_style(self) -> None:
-        style = ttk.Style(self.root)
-        style.theme_use("clam")  # only fully-themable base available across platforms
-
-        style.configure("TFrame", background=BG)
-        style.configure("Surface.TFrame", background=SURFACE)
-        style.configure("TLabel", background=BG, foreground=TEXT, font=("Segoe UI", 10))
-        style.configure("Title.TLabel", background=BG, foreground=TEXT, font=("Segoe UI Semibold", 20))
-        style.configure("Subtitle.TLabel", background=BG, foreground=TEXT_MUTED, font=("Segoe UI", 10))
-        style.configure(
-            "Section.TLabel", background=BG, foreground=TEXT_MUTED, font=("Segoe UI Semibold", 9)
-        )
-        style.configure("Status.TLabel", background=BG, foreground=TEXT_MUTED, font=("Segoe UI", 9))
-
-        style.configure(
-            "TEntry",
-            fieldbackground=SURFACE,
-            foreground=TEXT,
-            insertcolor=TEXT,
-            bordercolor=BORDER,
-            lightcolor=BORDER,
-            darkcolor=BORDER,
-            borderwidth=1,
-            padding=8,
-        )
-        style.map("TEntry", fieldbackground=[("focus", SURFACE_ALT)])
-
-        style.configure(
-            "Ghost.TButton",
-            background=SURFACE_ALT,
-            foreground=TEXT,
-            font=("Segoe UI", 9),
-            padding=(10, 7),
-            borderwidth=1,
-            relief="flat",
-        )
-        style.map(
-            "Ghost.TButton",
-            background=[("active", BORDER), ("disabled", SURFACE)],
-            foreground=[("disabled", TEXT_MUTED)],
-        )
-
-        style.configure(
-            "Accent.TButton",
-            background=ACCENT,
-            foreground="#20201E",
-            font=("Segoe UI Semibold", 10),
-            padding=(16, 8),
-            borderwidth=0,
-            relief="flat",
-        )
-        style.map(
-            "Accent.TButton",
-            background=[("active", ACCENT_HOVER), ("disabled", SURFACE_ALT)],
-            foreground=[("disabled", TEXT_MUTED)],
-        )
-
-    def _build_widgets(self) -> None:
-        header = ttk.Frame(self.root, padding=(18, 16, 18, 10))
+    def _build_shell(self) -> None:
+        header = ttk.Frame(self.root, padding=(18, 16, 18, 8))
         header.pack(fill="x")
         ttk.Label(header, text="\U0001F3C8 Fantasy Agent", style="Title.TLabel").pack(anchor="w")
         ttk.Label(
-            header, text="Superflex keeper league assistant", style="Subtitle.TLabel"
+            header, text="Superflex keeper league assistant -- dev build", style="Subtitle.TLabel"
         ).pack(anchor="w")
 
-        self._yard_line = tk.Canvas(self.root, height=14, bg=BG, highlightthickness=0)
-        self._yard_line.pack(fill="x", padx=18)
-        self._yard_line.bind("<Configure>", self._draw_yard_line)
+        tab_row = ttk.Frame(self.root, padding=(18, 0, 18, 0))
+        tab_row.pack(fill="x")
+        for key, label in TABS:
+            btn = ttk.Button(tab_row, text=label, style="Tab.TButton", command=lambda k=key: self._select(k))
+            btn.pack(side="left", padx=(0, 6), pady=(0, 8))
+            self._tab_buttons[key] = btn
 
-        actions_wrap = ttk.Frame(self.root, padding=(18, 14, 18, 6))
+        yard_line = tk.Canvas(self.root, height=14, bg=BG, highlightthickness=0)
+        yard_line.pack(fill="x", padx=18)
+        yard_line.bind("<Configure>", lambda _e: draw_yard_line(yard_line))
+
+        self._content = ttk.Frame(self.root)
+        self._content.pack(fill="both", expand=True)
+
+    def _select(self, key: str) -> None:
+        if key == self._current_key:
+            return
+        self._current_key = key
+        for k, btn in self._tab_buttons.items():
+            btn.configure(style="TabActive.TButton" if k == key else "Tab.TButton")
+
+        for child in self._content.winfo_children():
+            if child is self._console_frame:
+                child.pack_forget()
+            else:
+                child.destroy()
+
+        if key == "console":
+            self._console_frame.pack(fill="both", expand=True)
+        elif key == "roster":
+            RosterScreen(self._content, accent=ACCENT)
+        elif key == "rankings":
+            PowerRankingsScreen(self._content, accent=ACCENT)
+        elif key == "available":
+            BestAvailableScreen(self._content)
+
+    def _build_console(self, parent: tk.Widget) -> None:
+        actions_wrap = ttk.Frame(parent, padding=(0, 8, 0, 6))
         actions_wrap.pack(fill="x")
         ttk.Label(actions_wrap, text="QUICK ACTIONS", style="Section.TLabel").pack(anchor="w", pady=(0, 6))
         actions = ttk.Frame(actions_wrap)
@@ -169,7 +151,7 @@ class FantasyAgentGUI:
             btn.pack(side="left", padx=(0, 8))
             self._buttons.append(btn)
 
-        ask_wrap = ttk.Frame(self.root, padding=(18, 10, 18, 12))
+        ask_wrap = ttk.Frame(parent, padding=(0, 10, 0, 12))
         ask_wrap.pack(fill="x")
         ttk.Label(ask_wrap, text="ASK THE AGENT", style="Section.TLabel").pack(anchor="w", pady=(0, 6))
         ask_row = ttk.Frame(ask_wrap)
@@ -182,8 +164,8 @@ class FantasyAgentGUI:
         ask_btn.pack(side="left", padx=(8, 0))
         self._buttons.append(ask_btn)
 
-        output_wrap = ttk.Frame(self.root, style="Surface.TFrame", padding=1)
-        output_wrap.pack(fill="both", expand=True, padx=18, pady=(0, 6))
+        output_wrap = ttk.Frame(parent, style="Surface.TFrame", padding=1)
+        output_wrap.pack(fill="both", expand=True, pady=(0, 6))
         ttk.Label(
             output_wrap, text="OUTPUT", style="Section.TLabel", background=SURFACE, padding=(10, 6, 10, 0)
         ).pack(anchor="w")
@@ -196,7 +178,7 @@ class FantasyAgentGUI:
             fg=TEXT,
             insertbackground=TEXT,
             selectbackground=ACCENT,
-            selectforeground="#20201E",
+            selectforeground=ACCENT_TEXT,
             relief="flat",
             borderwidth=0,
             padx=10,
@@ -210,21 +192,9 @@ class FantasyAgentGUI:
         self._append_tag("muted", TEXT_MUTED)
 
         self._status = tk.StringVar(value="Ready.")
-        ttk.Label(self.root, textvariable=self._status, style="Status.TLabel", padding=(18, 0, 18, 12)).pack(
+        ttk.Label(parent, textvariable=self._status, style="Status.TLabel", padding=(0, 0, 0, 4)).pack(
             fill="x"
         )
-
-    def _draw_yard_line(self, _event: tk.Event | None = None) -> None:
-        canvas = self._yard_line
-        canvas.delete("all")
-        width = canvas.winfo_width()
-        if width <= 1:
-            return
-        y = 7
-        canvas.create_line(0, y, width, y, fill=BORDER, width=1)
-        step = 40
-        for x in range(0, width, step):
-            canvas.create_line(x, y - 4, x, y + 4, fill=ACCENT, width=2)
 
     def _append_tag(self, name: str, color: str) -> None:
         self._output.tag_configure(name, foreground=color)

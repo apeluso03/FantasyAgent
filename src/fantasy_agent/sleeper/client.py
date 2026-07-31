@@ -83,6 +83,17 @@ class SleeperClient:
         data = self._get(f"/league/{league_id}/users")
         return [SleeperUser.model_validate(u) for u in data]
 
+    def get_user(self, username_or_id: str) -> SleeperUser:
+        """Resolve a Sleeper username (or user_id) to a user_id -- used by the
+        setup wizard so a new user can type their username instead of hunting
+        down their numeric user_id."""
+        data = self._get(f"/user/{username_or_id}")
+        if data is None:
+            # Sleeper returns HTTP 200 with a JSON `null` body for an unknown
+            # username -- not a 404 -- so this has to be checked explicitly.
+            raise SleeperAPIError(f"No Sleeper user found for '{username_or_id}'")
+        return SleeperUser.model_validate(data)
+
     def get_players(self) -> dict[str, Player]:
         """Full NFL player database. Several MB — cache locally, don't call per-request."""
         data = self._get("/players/nfl")

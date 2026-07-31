@@ -4,13 +4,17 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    sleeper_league_id: str = "1312255990598483968"
+    # No hardcoded league here on purpose: the dev build supplies these via .env
+    # (see .env.example); the user-edition GUI collects them at first launch and
+    # writes them into its own AppData config instead (see user_config.py) so a
+    # distributed build never accidentally ships pointed at anyone's real league.
+    sleeper_league_id: str | None = None
     sleeper_base_url: str = "https://api.sleeper.app/v1"
     database_url: str = "sqlite:///data/fantasy_agent.db"
     players_cache_ttl_hours: int = 24
 
-    # "apel03" (apel's unnamed team) — used to default keeper/trade tools to your roster.
-    sleeper_owner_user_id: str = "1038585800163909632"
+    # Used to default keeper/trade tools to your roster.
+    sleeper_owner_user_id: str | None = None
 
     # Keeper cost = max(1, round_drafted - keeper_round_penalty). Undrafted players
     # (waiver/FA adds) are treated as having been "drafted" in the draft's last round.

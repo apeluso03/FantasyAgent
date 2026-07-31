@@ -106,6 +106,29 @@ def test_404_raises_sleeper_api_error():
         client.get_league("does-not-exist")
 
 
+def test_get_user_resolves_username_to_user_id():
+    client = make_client(
+        {"/user/apel03": {"user_id": "1038585800163909632", "display_name": "apel03", "metadata": None}}
+    )
+    user = client.get_user("apel03")
+    assert user.user_id == "1038585800163909632"
+    # metadata: null (as Sleeper actually sends for this endpoint) shouldn't crash validation.
+    assert user.metadata == {}
+
+
+def test_get_user_unknown_username_raises():
+    # Sleeper returns HTTP 200 with a literal `null` body for an unknown username,
+    # not a 404 -- this must still surface as a clear SleeperAPIError. (httpx's
+    # MockTransport `json=None` sends an empty body, not literal "null", so this
+    # needs its own handler to accurately simulate the real response.)
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="null", headers={"content-type": "application/json"})
+
+    client = SleeperClient(base_url="https://sleeper.test", transport=httpx.MockTransport(handler))
+    with pytest.raises(SleeperAPIError, match="No Sleeper user found"):
+        client.get_user("nobody")
+
+
 def test_5xx_retries_then_raises():
     calls = {"count": 0}
 
