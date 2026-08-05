@@ -10,7 +10,7 @@ from types import TracebackType
 
 import httpx
 
-from .schemas import Draft, DraftPick, League, Player, Roster, SleeperUser
+from .schemas import Draft, DraftPick, League, NFLState, Player, Roster, SleeperUser
 
 DEFAULT_BASE_URL = "https://api.sleeper.app/v1"
 
@@ -109,3 +109,13 @@ class SleeperClient:
     def get_draft_picks(self, draft_id: str) -> list[DraftPick]:
         data = self._get(f"/draft/{draft_id}/picks")
         return [DraftPick.model_validate(p) for p in data]
+
+    def get_nfl_state(self) -> NFLState:
+        return NFLState.model_validate(self._get("/state/nfl"))
+
+    def get_week_stats(self, season: str, week: int, season_type: str = "regular") -> dict[str, dict]:
+        """Per-player stat lines for one week, keyed by player_id. Sleeper
+        sends `null` instead of `{}` when a week has no stats yet (e.g. it
+        hasn't been played)."""
+        data = self._get(f"/stats/nfl/{season_type}/{season}/{week}")
+        return data or {}

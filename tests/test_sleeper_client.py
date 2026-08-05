@@ -129,6 +129,33 @@ def test_get_user_unknown_username_raises():
         client.get_user("nobody")
 
 
+def test_get_nfl_state_parses_response():
+    client = make_client(
+        {"/state/nfl": {"week": 5, "season": "2026", "season_type": "regular", "previous_season": "2025"}}
+    )
+    state = client.get_nfl_state()
+    assert state.week == 5
+    assert state.season == "2026"
+    assert state.previous_season == "2025"
+
+
+def test_get_week_stats_keys_by_player_id():
+    client = make_client(
+        {"/stats/nfl/regular/2026/4": {"1001": {"pts_ppr": 18.5, "pass_yd": 275}}}
+    )
+    stats = client.get_week_stats("2026", 4)
+    assert stats["1001"]["pts_ppr"] == 18.5
+
+
+def test_get_week_stats_null_body_returns_empty_dict():
+    # Sleeper sends a literal `null` body for a week that hasn't happened yet.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="null", headers={"content-type": "application/json"})
+
+    client = SleeperClient(base_url="https://sleeper.test", transport=httpx.MockTransport(handler))
+    assert client.get_week_stats("2026", 99) == {}
+
+
 def test_5xx_retries_then_raises():
     calls = {"count": 0}
 

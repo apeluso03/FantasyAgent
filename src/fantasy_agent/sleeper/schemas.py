@@ -93,6 +93,19 @@ class DraftPick(BaseModel):
     is_keeper: bool | None = None
 
 
+class NFLState(BaseModel):
+    """Current point in the NFL calendar (/state/nfl) -- tells us which week's
+    stats are the most recent completed ones, and what to fall back to during
+    the offseason/preseason when the current season has no games yet."""
+
+    model_config = ConfigDict(extra="allow")
+
+    week: int
+    season: str
+    season_type: str = "regular"  # "pre" | "regular" | "post"
+    previous_season: str | None = None
+
+
 class Player(BaseModel):
     model_config = ConfigDict(extra="allow")
 

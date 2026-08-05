@@ -22,14 +22,17 @@ from .db.session import get_session
 from .gui_screens import BestAvailableScreen, PowerRankingsScreen, RosterScreen
 from .gui_theme import (
     BG,
+    BORDER,
     CELADON,
     CELADON_TEXT,
     SURFACE,
     SURFACE_ALT,
     TEXT,
     TEXT_MUTED,
+    RoundedCard,
     build_style_user,
     draw_yard_line,
+    rounded_rect_points,
     set_window_icon,
 )
 from .sleeper.client import SleeperAPIError, SleeperClient
@@ -42,11 +45,18 @@ EXAMPLE_PROMPTS = [
 ]
 
 TABS = [
-    ("chat", "\U0001F4AC Chat"),
-    ("roster", "\U0001F3C8 My Roster"),
-    ("rankings", "\U0001F4CA Power Rankings"),
-    ("available", "\U0001F50D Best Available"),
+    ("chat", "\U0001F4AC", "Chat"),
+    ("roster", "\U0001F3C8", "My Roster"),
+    ("rankings", "\U0001F4CA", "Power Rankings"),
+    ("available", "\U0001F50D", "Best Available"),
 ]
+
+TAB_META = {
+    "chat": ("Chat", "Ask me anything about your league."),
+    "roster": ("My Roster", "Your current lineup, ordered like a real roster card."),
+    "rankings": ("Power Rankings", "Every team ranked by starting lineup strength."),
+    "available": ("Best Available", "Live draft board, polled fresh from Sleeper."),
+}
 
 _BOLD_RE = re.compile(r"(\*\*[^*]+?\*\*)")
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)")
@@ -81,18 +91,22 @@ def _insert_markdown_lite(widget: tk.Text, text: str, base_tag: str) -> None:
                 widget.insert("end", chunk, (base_tag,))
 
 
-class ChatLog(ttk.Frame):
-    """The scrollable message list. Each message is one tagged paragraph --
-    Tkinter's Text widget can't give a background that hugs just the text
-    (it always spans the paragraph's full margin-to-margin width), so these
-    read as chat-style highlighted message blocks rather than literal
-    rounded bubbles, differentiated by side/color and a sender label.
+class ChatLog(tk.Frame):
+    """The scrollable message list, wrapped in a rounded card so the panel
+    itself reads as one of the app's "bubble block" containers. Individual
+    messages are still tagged paragraphs inside a single Text widget --
+    Tkinter can't give a background that hugs just the text (it always spans
+    the paragraph's full margin-to-margin width), so those read as
+    chat-style highlighted blocks rather than literal rounded bubbles,
+    differentiated by side/color and a sender label.
     """
 
     def __init__(self, parent: tk.Widget) -> None:
-        super().__init__(parent, style="Surface.TFrame", padding=1)
+        super().__init__(parent, bg=BG)
+        card = RoundedCard(self, bg=SURFACE, parent_bg=BG, radius=16, padding=1, fill_height=True)
+        card.pack(fill="both", expand=True)
         self._text = tk.Text(
-            self,
+            card.content,
             wrap="word",
             state="disabled",
             font=("Segoe UI", 10),
@@ -108,10 +122,10 @@ class ChatLog(ttk.Frame):
             spacing1=2,
         )
         vbar = ttk.Scrollbar(
-            self, orient="vertical", command=self._text.yview, style="Minimal.Vertical.TScrollbar"
+            card.content, orient="vertical", command=self._text.yview, style="Minimal.Vertical.TScrollbar"
         )
         self._text.configure(yscrollcommand=vbar.set)
-        self._text.pack(side="left", fill="both", expand=True, padx=(1, 0), pady=1)
+        self._text.pack(side="left", fill="both", expand=True)
         vbar.pack(side="right", fill="y")
 
         from .gui_theme import ASSISTANT_BUBBLE, ERROR_BUBBLE, USER_BUBBLE
@@ -388,11 +402,123 @@ class ChatScreen(ttk.Frame):
         self._entry.focus_set()
 
 
+class _SidebarItem(tk.Canvas):
+    """One sidebar nav row. Drawn entirely on a single Canvas (rounded pill
+    background + label, both canvas items) rather than a Label sitting on
+    top of one -- that would need pixel-perfect alignment between the two to
+    avoid the label's square corners covering the pill's rounded ones; one
+    canvas drawing both atomically sidesteps that."""
+
+    def __init__(self, parent: tk.Widget, *, icon: str, label: str, sidebar_bg: str, on_click) -> None:
+        super().__init__(parent, bg=sidebar_bg, highlightthickness=0, height=40)
+        self._sidebar_bg = sidebar_bg
+        self._icon = icon
+        self._label = label
+        self._active = False
+        self._hover = False
+        self._accent = TEXT_MUTED
+        self._accent_text = TEXT
+        self.bind("<Configure>", lambda _e: self._redraw())
+        self.bind("<Button-1>", lambda _e: on_click())
+        self.bind("<Enter>", lambda _e: self._set_hover(True))
+        self.bind("<Leave>", lambda _e: self._set_hover(False))
+
+    def set_active(self, active: bool, accent: str, accent_text: str) -> None:
+        self._active = active
+        self._accent = accent
+        self._accent_text = accent_text
+        self._redraw()
+
+    def _set_hover(self, hovering: bool) -> None:
+        self._hover = hovering
+        self._redraw()
+
+    def _redraw(self) -> None:
+        width = self.winfo_width()
+        height = self.winfo_height()
+        if width <= 1:
+            return
+        self.delete("all")
+        if self._active:
+            points = rounded_rect_points(10, 4, width - 10, height - 4, 10)
+            self.create_polygon(points, smooth=True, fill=self._accent, outline="")
+            fg = self._accent_text
+        elif self._hover:
+            points = rounded_rect_points(10, 4, width - 10, height - 4, 10)
+            self.create_polygon(points, smooth=True, fill=SURFACE_ALT, outline="")
+            fg = TEXT
+        else:
+            fg = TEXT_MUTED
+        # Two separate text items, not one combined string: Canvas text doesn't
+        # do font-fallback the way a Label does, so a color-emoji glyph next to
+        # plain Latin text in a single font spec renders the emoji as a "tofu"
+        # box -- explicitly using an emoji-capable font for just the icon fixes it.
+        self.create_text(24, height // 2, text=self._icon, anchor="w", fill=fg, font=("Segoe UI Emoji", 11))
+        self.create_text(48, height // 2, text=self._label, anchor="w", fill=fg, font=("Segoe UI Semibold", 10))
+        self.configure(cursor="hand2")
+
+
+class Sidebar(tk.Frame):
+    """Persistent left nav: logo, tab items (active one gets a rounded pill
+    highlight), and a footer with the connected league + a Settings button."""
+
+    def __init__(
+        self,
+        parent: tk.Widget,
+        *,
+        tabs: list[tuple[str, str, str]],
+        on_select,
+        accent: str,
+        accent_text: str,
+        footer_text: str,
+        on_settings,
+    ) -> None:
+        super().__init__(parent, bg=BG, width=210)
+        self.pack_propagate(False)
+        self._accent = accent
+        self._accent_text = accent_text
+        self._items: dict[str, _SidebarItem] = {}
+        self._on_select = on_select
+
+        header = tk.Frame(self, bg=BG)
+        header.pack(fill="x", padx=18, pady=(22, 18))
+        tk.Label(
+            header, text="\U0001F3C8 Fantasy Agent", bg=BG, fg=TEXT, font=("Segoe UI Semibold", 13)
+        ).pack(anchor="w")
+
+        nav = tk.Frame(self, bg=BG)
+        nav.pack(fill="x", padx=8)
+        for key, icon, label in tabs:
+            item = _SidebarItem(
+                nav, icon=icon, label=label, sidebar_bg=BG, on_click=lambda k=key: self._on_select(k)
+            )
+            item.pack(fill="x", pady=2)
+            self._items[key] = item
+
+        tk.Frame(self, bg=BG).pack(fill="both", expand=True)  # spacer pushes the footer down
+
+        divider = tk.Frame(self, bg=BORDER, height=1)
+        divider.pack(fill="x", padx=18)
+        footer = tk.Frame(self, bg=BG)
+        footer.pack(fill="x", padx=18, pady=16)
+        tk.Label(
+            footer, text=footer_text, bg=BG, fg=TEXT_MUTED, font=("Segoe UI", 9),
+            wraplength=170, justify="left",
+        ).pack(anchor="w", pady=(10, 10))
+        ttk.Button(footer, text="⚙ Settings", style="Ghost.TButton", command=on_settings).pack(fill="x")
+
+    def set_active(self, key: str) -> None:
+        for item_key, item in self._items.items():
+            item.set_active(item_key == key, self._accent, self._accent_text)
+
+
 class MainShell(ttk.Frame):
-    """Tabbed hub shown once setup is complete: a top tab bar switches
-    between Chat / My Roster / Power Rankings / Best Available. Each tab's
-    content is rebuilt fresh on selection (cheap local DB reads, plus one
-    live call for Best Available) so it always reflects the latest sync."""
+    """Hub shown once setup is complete: a left sidebar switches between
+    Chat / My Roster / Power Rankings / Best Available (the sidebar's active
+    item gets a rounded highlight pill, matching the reference dashboard
+    design). Each tab's content is rebuilt fresh on selection (cheap local DB
+    reads, plus one live call for Best Available) so it always reflects the
+    latest sync."""
 
     def __init__(self, parent: tk.Widget, config: user_config.UserConfig, on_settings) -> None:
         super().__init__(parent)
@@ -400,42 +526,54 @@ class MainShell(ttk.Frame):
         self._config = config
         self._on_settings = on_settings
         self._current_key: str | None = None
-        self._tab_buttons: dict[str, ttk.Button] = {}
         self._build()
         self._select("chat")
 
     def _build(self) -> None:
-        header = ttk.Frame(self, padding=(18, 16, 18, 8))
-        header.pack(fill="x")
-        title_col = ttk.Frame(header)
-        title_col.pack(side="left", fill="x", expand=True)
-        ttk.Label(title_col, text="\U0001F3C8 Fantasy Agent", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(title_col, text="Your league, at a glance.", style="Subtitle.TLabel").pack(anchor="w")
-        ttk.Button(
-            header, text="⚙ Settings", style="Ghost.TButton",
-            command=lambda: self._on_settings(self._config),
-        ).pack(side="right", anchor="n")
+        body = tk.Frame(self, bg=BG)
+        body.pack(fill="both", expand=True)
 
-        tab_row = ttk.Frame(self, padding=(18, 0, 18, 0))
-        tab_row.pack(fill="x")
-        for key, label in TABS:
-            btn = ttk.Button(tab_row, text=label, style="Tab.TButton", command=lambda k=key: self._select(k))
-            btn.pack(side="left", padx=(0, 6), pady=(0, 8))
-            self._tab_buttons[key] = btn
+        team = self._config.sleeper_username or "your league"
+        self._sidebar = Sidebar(
+            body,
+            tabs=TABS,
+            on_select=self._select,
+            accent=CELADON,
+            accent_text=CELADON_TEXT,
+            footer_text=f"Connected as {team}",
+            on_settings=lambda: self._on_settings(self._config),
+        )
+        self._sidebar.pack(side="left", fill="y")
 
-        yard_line = tk.Canvas(self, height=14, bg=BG, highlightthickness=0)
-        yard_line.pack(fill="x", padx=18)
-        yard_line.bind("<Configure>", lambda _e: draw_yard_line(yard_line))
+        divider = tk.Frame(body, bg=BORDER, width=1)
+        divider.pack(side="left", fill="y")
 
-        self._content = ttk.Frame(self)
-        self._content.pack(fill="both", expand=True)
+        content_col = tk.Frame(body, bg=BG)
+        content_col.pack(side="left", fill="both", expand=True)
+
+        self._page_header = tk.Frame(content_col, bg=BG)
+        self._page_header.pack(fill="x", padx=24, pady=(22, 4))
+        self._page_title = tk.Label(
+            self._page_header, text="", bg=BG, fg=TEXT, font=("Segoe UI Semibold", 18)
+        )
+        self._page_title.pack(anchor="w")
+        self._page_subtitle = tk.Label(
+            self._page_header, text="", bg=BG, fg=TEXT_MUTED, font=("Segoe UI", 10)
+        )
+        self._page_subtitle.pack(anchor="w", pady=(2, 0))
+
+        self._content = ttk.Frame(content_col)
+        self._content.pack(fill="both", expand=True, padx=24, pady=(8, 20))
 
     def _select(self, key: str) -> None:
         if key == self._current_key:
             return
         self._current_key = key
-        for k, btn in self._tab_buttons.items():
-            btn.configure(style="TabActive.TButton" if k == key else "Tab.TButton")
+        self._sidebar.set_active(key)
+
+        title, subtitle = TAB_META[key]
+        self._page_title.configure(text=title)
+        self._page_subtitle.configure(text=subtitle)
 
         for child in self._content.winfo_children():
             child.destroy()

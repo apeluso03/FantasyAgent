@@ -216,6 +216,97 @@ def build_style_user(root: tk.Tk) -> ttk.Style:
     return style
 
 
+def rounded_rect_points(x1: float, y1: float, x2: float, y2: float, radius: float) -> list[float]:
+    """Corner points for a rounded rectangle, meant for Canvas.create_polygon
+    with smooth=True (Tk's polygon spline rounds the corners for us -- this
+    just keeps the straight edges straight by duplicating each corner)."""
+    r = min(radius, (x2 - x1) / 2, (y2 - y1) / 2)
+    return [
+        x1 + r, y1,
+        x2 - r, y1,
+        x2, y1,
+        x2, y1 + r,
+        x2, y2 - r,
+        x2, y2,
+        x2 - r, y2,
+        x1 + r, y2,
+        x1, y2,
+        x1, y2 - r,
+        x1, y1 + r,
+        x1, y1,
+    ]
+
+
+class RoundedCard(tk.Frame):
+    """A rounded-corner "bubble block" container. Tkinter has no native
+    rounded-rect widget, so a Canvas draws the rounded background and
+    `.content` (a plain Frame sitting on top of it, inset by `padding`) is
+    where callers pack/grid their real widgets.
+
+    Two sizing modes:
+    - `fill_height=False` (default, for list rows/stat cards): the card
+      auto-sizes its height to whatever gets packed into `.content`; width
+      follows the parent layout (pack with fill="x").
+    - `fill_height=True` (for a panel that should occupy the rest of the
+      window, e.g. the chat log): height instead follows whatever space the
+      parent's geometry manager gives it (pack with fill="both", expand=True),
+      same as a plain Frame would.
+    """
+
+    def __init__(
+        self,
+        parent: tk.Widget,
+        *,
+        bg: str,
+        parent_bg: str,
+        radius: int = 14,
+        padding: int = 10,
+        fill_height: bool = False,
+    ) -> None:
+        super().__init__(parent, bg=parent_bg, highlightthickness=0)
+        self._bg = bg
+        self._radius = radius
+        self._fill_height = fill_height
+        self._canvas = tk.Canvas(self, bg=parent_bg, highlightthickness=0, bd=0)
+        self._canvas.pack(fill="both", expand=True)
+        self.body = tk.Frame(self._canvas, bg=bg)
+        self.content = tk.Frame(self.body, bg=bg)
+        self.content.pack(fill="both", expand=True, padx=padding, pady=padding)
+        self._window = self._canvas.create_window((0, 0), window=self.body, anchor="nw")
+        if not fill_height:
+            self.body.bind("<Configure>", self._sync_size)
+        self._canvas.bind("<Configure>", self._sync_size)
+
+    def refresh(self) -> None:
+        """Recompute the card's height from `.content`'s current natural
+        size. Needed after adding/removing content dynamically (e.g. an
+        expand/collapse toggle): once `_sync_size` has pinned the canvas
+        window item to an explicit height, nothing else triggers a resize on
+        its own -- `.content`'s size is governed by `fill="both", expand=True`
+        against that pinned area, so growing its children doesn't emit a
+        `<Configure>` on anything upstream. Callers that mutate `.content`
+        after initial layout must call this explicitly."""
+        self.body.update_idletasks()
+        self._sync_size()
+
+    def _sync_size(self, _event: tk.Event | None = None) -> None:
+        width = self._canvas.winfo_width()
+        if width <= 1:
+            return
+        if self._fill_height:
+            height = self._canvas.winfo_height()
+            if height <= 1:
+                return
+        else:
+            height = self.body.winfo_reqheight()
+            self._canvas.configure(height=height)
+        self._canvas.itemconfig(self._window, width=width, height=height)
+        self._canvas.delete("card_bg")
+        points = rounded_rect_points(1, 1, max(width - 1, 2), max(height - 1, 2), self._radius)
+        self._canvas.create_polygon(points, smooth=True, fill=self._bg, outline="", tags="card_bg")
+        self._canvas.tag_lower("card_bg")
+
+
 def draw_yard_line(canvas: tk.Canvas) -> None:
     """Decorative separator: a horizontal line with yard-marker ticks."""
     canvas.delete("all")
