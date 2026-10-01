@@ -11,6 +11,7 @@ env/
 
 # local sqlite db + cached data
 data/*.db
+data/*.db.bak-*
 data/*.sqlite3
 *.log
 

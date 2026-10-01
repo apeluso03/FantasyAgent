@@ -186,3 +186,55 @@ def test_usage_logging_tolerates_missing_cache_details(monkeypatch, caplog):
 
     assert answer == "ok"
     assert any("cached=0" in record.message for record in caplog.records)
+
+
+def test_run_agent_with_trace_records_steps_in_order(monkeypatch):
+    def fake_league_info(session, **kwargs):
+        return {"name": "Test League"}
+
+    def fake_roster(session, **kwargs):
+        raise core.ToolError("no team matches 'Nobody'")
+
+    monkeypatch.setitem(core.TOOL_HANDLERS, "get_league_info", fake_league_info)
+    monkeypatch.setitem(core.TOOL_HANDLERS, "get_roster", fake_roster)
+
+    responses = [
+        FakeResponse(
+            [
+                FakeFunctionCallItem("get_league_info", {}, call_id="call_1"),
+                FakeFunctionCallItem("get_roster", {"team": "Nobody"}, call_id="call_2"),
+            ],
+            output_text="",
+        ),
+        FakeResponse([FakeMessageItem("Here's your answer.")], output_text="Here's your answer."),
+    ]
+    _patch_client(monkeypatch, responses)
+
+    result = core.run_agent_with_trace("what are the league rules?", session=object())
+
+    assert result.answer == "Here's your answer."
+    assert [s.tool_name for s in result.steps] == ["get_league_info", "get_roster"]
+    assert result.steps[0].error is False
+    assert json.loads(result.steps[0].output_preview) == {"name": "Test League"}
+    assert result.steps[1].error is True
+    assert "no team matches" in result.steps[1].output_preview
+    assert result.usage.input_tokens == 20  # two FakeUsage(input_tokens=10) responses, summed
+    assert result.usage.output_tokens == 10
+
+
+def test_run_agent_with_trace_passes_history_as_plain_text_turns(monkeypatch):
+    responses = [FakeResponse([], output_text="follow-up answer")]
+    client = _patch_client(monkeypatch, responses)
+
+    history = [
+        {"role": "user", "content": "should I keep Bijan?"},
+        {"role": "assistant", "content": "Yes, keep him."},
+    ]
+    result = core.run_agent_with_trace("what about my other RB?", session=object(), history=history)
+
+    assert result.answer == "follow-up answer"
+    assert client.responses.calls[0]["input"] == [
+        {"role": "user", "content": "should I keep Bijan?"},
+        {"role": "assistant", "content": "Yes, keep him."},
+        {"role": "user", "content": "what about my other RB?"},
+    ]

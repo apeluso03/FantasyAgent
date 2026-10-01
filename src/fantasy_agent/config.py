@@ -35,5 +35,12 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     openai_model: str = "gpt-5.6-luna"
 
+    # Web backend only (backend/app) -- comma-separated allowed frontend origins.
+    cors_origins: str = "http://localhost:5173"
+    # Web backend only -- if set, /api/agent/* and /api/sync/* require this value
+    # in an X-Access-Code header. A public URL that calls the OpenAI API with
+    # your key can otherwise run up a bill from anyone who finds the link.
+    demo_access_code: str | None = None
+
 
 settings = Settings()

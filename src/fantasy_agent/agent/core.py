@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass, field
 from typing import Any
 
 from openai import OpenAI
@@ -36,14 +37,54 @@ tools returned, not just a verdict."""
 
 MAX_TOOL_ITERATIONS = 8
 
+# How much of a tool's output to keep in an AgentStep for the "show reasoning"
+# trace -- long enough to be useful, short enough that a chatty tool result
+# doesn't bloat the response.
+_STEP_OUTPUT_PREVIEW_CHARS = 500
 
-def run_agent(question: str, session: Session, *, model: str | None = None) -> str:
+
+@dataclass
+class AgentStep:
+    tool_name: str
+    arguments: dict
+    output_preview: str
+    error: bool = False
+
+
+@dataclass
+class AgentUsage:
+    input_tokens: int = 0
+    cached_tokens: int = 0
+    output_tokens: int = 0
+
+
+@dataclass
+class AgentResult:
+    answer: str
+    steps: list[AgentStep] = field(default_factory=list)
+    usage: AgentUsage = field(default_factory=AgentUsage)
+
+
+def run_agent_with_trace(
+    question: str,
+    session: Session,
+    *,
+    history: list[dict[str, str]] | None = None,
+    model: str | None = None,
+) -> AgentResult:
     if not settings.openai_api_key:
         raise RuntimeError("OPENAI_API_KEY is not set -- add it to .env to use `fantasy-agent ask`.")
 
     client = OpenAI(api_key=settings.openai_api_key)
     model = model or settings.openai_model
-    input_list: list[Any] = [{"role": "user", "content": question}]
+
+    # Only prior plain-text turns come back in -- not old tool calls, to keep
+    # requests small (see CLAUDE.md section 5.7).
+    input_list: list[Any] = [{"role": turn["role"], "content": turn["content"]} for turn in (history or [])]
+    input_list.append({"role": "user", "content": question})
+
+    steps: list[AgentStep] = []
+    usage = AgentUsage()
 
     for _ in range(MAX_TOOL_ITERATIONS):
         response = client.responses.create(
@@ -53,15 +94,15 @@ def run_agent(question: str, session: Session, *, model: str | None = None) -> s
             input=input_list,
         )
 
-        usage = response.usage
-        details = getattr(usage, "input_tokens_details", None)
+        resp_usage = response.usage
+        details = getattr(resp_usage, "input_tokens_details", None)
         cached = (getattr(details, "cached_tokens", 0) or 0) if details is not None else 0
-        logger.info(
-            "usage input=%d cached=%d output=%d",
-            getattr(usage, "input_tokens", 0) or 0,
-            cached,
-            getattr(usage, "output_tokens", 0) or 0,
-        )
+        input_tokens = getattr(resp_usage, "input_tokens", 0) or 0
+        output_tokens = getattr(resp_usage, "output_tokens", 0) or 0
+        usage.input_tokens += input_tokens
+        usage.cached_tokens += cached
+        usage.output_tokens += output_tokens
+        logger.info("usage input=%d cached=%d output=%d", input_tokens, cached, output_tokens)
 
         # The model's own turn (text and/or function calls) becomes input context
         # for the next round -- the Responses API is a flat event list, not the
@@ -70,21 +111,40 @@ def run_agent(question: str, session: Session, *, model: str | None = None) -> s
 
         function_calls = [item for item in response.output if item.type == "function_call"]
         if not function_calls:
-            return response.output_text
+            return AgentResult(answer=response.output_text, steps=steps, usage=usage)
 
         for call in function_calls:
             args = json.loads(call.arguments) if call.arguments else {}
             logger.info("tool_call %s(%s)", call.name, json.dumps(args))
             handler = TOOL_HANDLERS.get(call.name)
+            error = False
             if handler is None:
                 output = f"Error: unknown tool {call.name}"
+                error = True
             else:
                 try:
                     result = handler(session, **args)
                     output = json.dumps(result)
                 except ToolError as exc:
                     output = f"Error: {exc}"
+                    error = True
             logger.info("tool_result %s -> %s", call.name, output[:500])
+            steps.append(
+                AgentStep(
+                    tool_name=call.name,
+                    arguments=args,
+                    output_preview=output[:_STEP_OUTPUT_PREVIEW_CHARS],
+                    error=error,
+                )
+            )
             input_list.append({"type": "function_call_output", "call_id": call.call_id, "output": output})
 
-    return "Reached the tool-call limit without a final answer -- try a narrower question."
+    return AgentResult(
+        answer="Reached the tool-call limit without a final answer -- try a narrower question.",
+        steps=steps,
+        usage=usage,
+    )
+
+
+def run_agent(question: str, session: Session, *, model: str | None = None) -> str:
+    return run_agent_with_trace(question, session, model=model).answer

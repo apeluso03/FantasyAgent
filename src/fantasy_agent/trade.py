@@ -175,8 +175,8 @@ def evaluate_trade(
 
     requirements = starter_requirements(league.roster_positions)
 
-    user_a = session.get(UserRecord, side_a_owner)
-    user_b = session.get(UserRecord, side_b_owner)
+    user_a = session.query(UserRecord).filter_by(league_id=league_id, user_id=side_a_owner).one_or_none()
+    user_b = session.query(UserRecord).filter_by(league_id=league_id, user_id=side_b_owner).one_or_none()
     team_name_a = user_a.team_name if user_a else side_a_owner
     team_name_b = user_b.team_name if user_b else side_b_owner
 

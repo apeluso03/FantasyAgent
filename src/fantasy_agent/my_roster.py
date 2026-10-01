@@ -70,7 +70,7 @@ def get_my_roster(
     if roster is None:
         raise RuntimeError(f"No roster found for owner_id={owner_user_id} in league {league_id}.")
 
-    user = session.get(UserRecord, owner_user_id)
+    user = session.query(UserRecord).filter_by(league_id=league_id, user_id=owner_user_id).one_or_none()
     team_name = (user.team_name if user else None) or owner_user_id or f"Roster {roster.roster_id}"
 
     players_by_id = {
