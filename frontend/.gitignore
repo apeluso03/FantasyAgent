@@ -1,0 +1,12 @@
+node_modules
+dist
+dist-ssr
+*.local
+.env
+
+# tsc -b build cache + the compiled JS it emits for vite.config.ts
+# (tsconfig.node.json is composite: true without noEmit -- unlike the main
+# app's tsconfig.json, it's not a pure type-check)
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts

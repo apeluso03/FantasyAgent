@@ -1,0 +1,10 @@
+# Netlify deploy config (CLAUDE.md section 7.3). The SPA fallback itself is
+# public/_redirects (copied into dist/ by Vite), not duplicated here --
+# without it, a hard refresh on e.g. /roster 404s instead of loading the app
+# and letting React Router take over client-side.
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "20"
