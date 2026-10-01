@@ -3,11 +3,14 @@ no visible tool-call trace, meant for someone other than the developer to
 run. See gui.py for the dev build this is paired with -- from here on, GUI
 changes should land in both.
 
-Startup flow: if no saved config exists yet (user_config.py, stored outside
-the repo in the OS's per-user app-data dir), show a setup wizard collecting
+Startup flow: if no saved profile exists yet (profiles.py, stored outside the
+repo in the OS's per-user app-data dir), show a setup wizard collecting
 league platform + ID + OpenAI key before anything else can run; otherwise
-load the saved config and go straight to the tabbed main shell (Chat / My
-Roster / Power Rankings / Best Available).
+apply the active profile and go straight to the tabbed main shell (Chat / My
+Roster / Power Rankings / Best Available). The sidebar's league switcher
+(profile_ui.py, shared with gui.py) lets you add more leagues and switch
+between them -- each has its own local cache, so switching back to one you
+were just on doesn't need to re-sync from scratch.
 """
 
 from __future__ import annotations
@@ -17,7 +20,7 @@ import threading
 import tkinter as tk
 from tkinter import ttk
 
-from . import user_config
+from . import profile_ui, profiles
 from .db.session import get_session
 from .gui_screens import BestAvailableScreen, PowerRankingsScreen, RosterScreen
 from .gui_theme import (
@@ -188,13 +191,21 @@ class ChatLog(tk.Frame):
 
 
 class SetupScreen(ttk.Frame):
-    def __init__(self, parent: tk.Widget, on_complete, prefill: user_config.UserConfig | None = None) -> None:
+    """First-run onboarding (no `prefill`, creates a new profile) and the
+    Settings screen for the currently-active profile (`prefill` set, edits it
+    in place -- see profiles.update_and_sync_profile). Adding a *second* or
+    later league happens through the sidebar's league switcher instead
+    (profile_ui.AddLeagueDialog), which is a lighter popup since by then
+    there's already a running app to pop up over."""
+
+    def __init__(self, parent: tk.Widget, on_complete, prefill: profiles.Profile | None = None) -> None:
         super().__init__(parent, padding=28)
         self.pack(fill="both", expand=True)
         self._on_complete = on_complete
+        self._prefill = prefill
         self._build(prefill)
 
-    def _build(self, prefill: user_config.UserConfig | None) -> None:
+    def _build(self, prefill: profiles.Profile | None) -> None:
         ttk.Label(self, text="\U0001F3C8 Fantasy Agent", style="Title.TLabel").pack(anchor="w")
         ttk.Label(
             self, text="Connect your league to get started.", style="Subtitle.TLabel"
@@ -203,6 +214,12 @@ class SetupScreen(ttk.Frame):
         yard_line = tk.Canvas(self, height=14, bg=BG, highlightthickness=0)
         yard_line.pack(fill="x", pady=(4, 20))
         yard_line.bind("<Configure>", lambda _e: draw_yard_line(yard_line))
+
+        self._name = self._labeled_entry(
+            "LEAGUE NICKNAME",
+            prefill.name if prefill else "",
+            hint="How this league shows up in the switcher, e.g. Dynasty League.",
+        )
 
         ttk.Label(self, text="FANTASY PLATFORM", style="Section.TLabel").pack(anchor="w", pady=(0, 6))
         self._platform = tk.StringVar(value=(prefill.platform if prefill else "sleeper"))
@@ -275,11 +292,15 @@ class SetupScreen(ttk.Frame):
         self._show_btn.configure(text="Hide" if self._key_visible else "Show")
 
     def _submit(self) -> None:
+        name = self._name.get().strip()
         platform = self._platform.get()
         league_id = self._league_id.get().strip()
         username = self._username.get().strip()
         api_key = self._api_key.get().strip()
 
+        if not name:
+            self._error.set("Give this league a nickname.")
+            return
         if platform != "sleeper":
             self._error.set(f"{platform.title()} support is coming soon -- Sleeper works today.")
             return
@@ -297,33 +318,23 @@ class SetupScreen(ttk.Frame):
         self._submit_btn.state(["disabled"])
         self._status.set("Connecting to Sleeper...")
         threading.Thread(
-            target=self._do_setup, args=(platform, league_id, username, api_key), daemon=True
+            target=self._do_setup, args=(name, platform, league_id, username, api_key), daemon=True
         ).start()
 
-    def _do_setup(self, platform: str, league_id: str, username: str, api_key: str) -> None:
+    def _do_setup(self, name: str, platform: str, league_id: str, username: str, api_key: str) -> None:
         try:
-            with SleeperClient() as client:
-                user = client.get_user(username)
-                client.get_league(league_id)  # raises if the league ID doesn't exist
-
-            config = user_config.UserConfig(
-                platform=platform,
-                league_id=league_id,
-                openai_api_key=api_key,
-                sleeper_username=username,
-                sleeper_owner_user_id=user.user_id,
-            )
-            user_config.save_user_config(config)
-            user_config.apply_user_config(config)
-
-            self.after(0, lambda: self._status.set("Syncing your league..."))
-            from .sync import sync_all, sync_rankings_all
-
-            sync_all(league_id)
-            self.after(0, lambda: self._status.set("Fetching player rankings..."))
-            sync_rankings_all()
-
-            self.after(0, lambda: self._on_complete(config))
+            on_status = lambda msg: self.after(0, lambda: self._status.set(msg))  # noqa: E731
+            if self._prefill is not None:
+                profile = profiles.update_and_sync_profile(
+                    profile_id=self._prefill.profile_id, name=name, platform=platform, league_id=league_id,
+                    username=username, api_key=api_key, on_status=on_status,
+                )
+            else:
+                profile = profiles.create_and_sync_profile(
+                    name=name, platform=platform, league_id=league_id, username=username, api_key=api_key,
+                    on_status=on_status,
+                )
+            self.after(0, lambda: self._on_complete(profile))
         except SleeperAPIError as exc:
             self.after(0, lambda: self._fail(str(exc)))
         except Exception as exc:  # network hiccups, bad key format, etc. -- never crash the wizard
@@ -460,7 +471,9 @@ class _SidebarItem(tk.Canvas):
 
 class Sidebar(tk.Frame):
     """Persistent left nav: logo, tab items (active one gets a rounded pill
-    highlight), and a footer with the connected league + a Settings button."""
+    highlight), and a footer with the league switcher + a Settings button.
+    The switcher shows the active league's nickname; clicking it opens the
+    shared profile menu (profile_ui.py) to switch/add/manage leagues."""
 
     def __init__(
         self,
@@ -470,7 +483,8 @@ class Sidebar(tk.Frame):
         on_select,
         accent: str,
         accent_text: str,
-        footer_text: str,
+        league_name: str,
+        on_switcher_click,
         on_settings,
     ) -> None:
         super().__init__(parent, bg=BG, width=210)
@@ -501,15 +515,30 @@ class Sidebar(tk.Frame):
         divider.pack(fill="x", padx=18)
         footer = tk.Frame(self, bg=BG)
         footer.pack(fill="x", padx=18, pady=16)
-        tk.Label(
-            footer, text=footer_text, bg=BG, fg=TEXT_MUTED, font=("Segoe UI", 9),
-            wraplength=170, justify="left",
-        ).pack(anchor="w", pady=(10, 10))
+
+        ttk.Label(footer, text="LEAGUE", style="Section.TLabel").pack(anchor="w", pady=(0, 4))
+        self._switcher_btn = ttk.Button(
+            footer, text=f"{league_name}  ▾", style="Ghost.TButton", command=on_switcher_click,
+        )
+        self._switcher_btn.pack(fill="x", pady=(0, 8))
+        self._sync_status = tk.StringVar(value="")
+        ttk.Label(
+            footer, textvariable=self._sync_status, background=BG, foreground=TEXT_MUTED, font=("Segoe UI", 8),
+        ).pack(anchor="w", pady=(0, 8))
         ttk.Button(footer, text="⚙ Settings", style="Ghost.TButton", command=on_settings).pack(fill="x")
 
     def set_active(self, key: str) -> None:
         for item_key, item in self._items.items():
             item.set_active(item_key == key, self._accent, self._accent_text)
+
+    def set_league_name(self, name: str) -> None:
+        self._switcher_btn.configure(text=f"{name}  ▾")
+
+    def set_sync_status(self, text: str) -> None:
+        self._sync_status.set(text)
+
+    def set_switching(self, switching: bool) -> None:
+        self._switcher_btn.state(["disabled"] if switching else ["!disabled"])
 
 
 class MainShell(ttk.Frame):
@@ -518,12 +547,14 @@ class MainShell(ttk.Frame):
     item gets a rounded highlight pill, matching the reference dashboard
     design). Each tab's content is rebuilt fresh on selection (cheap local DB
     reads, plus one live call for Best Available) so it always reflects the
-    latest sync."""
+    latest sync -- including right after switching leagues, since that also
+    re-selects the current tab to force a reload against the new profile's
+    data (see _switch_to)."""
 
-    def __init__(self, parent: tk.Widget, config: user_config.UserConfig, on_settings) -> None:
+    def __init__(self, parent: tk.Widget, profile: profiles.Profile, on_settings) -> None:
         super().__init__(parent)
         self.pack(fill="both", expand=True)
-        self._config = config
+        self._profile = profile
         self._on_settings = on_settings
         self._current_key: str | None = None
         self._build()
@@ -533,15 +564,15 @@ class MainShell(ttk.Frame):
         body = tk.Frame(self, bg=BG)
         body.pack(fill="both", expand=True)
 
-        team = self._config.sleeper_username or "your league"
         self._sidebar = Sidebar(
             body,
             tabs=TABS,
             on_select=self._select,
             accent=CELADON,
             accent_text=CELADON_TEXT,
-            footer_text=f"Connected as {team}",
-            on_settings=lambda: self._on_settings(self._config),
+            league_name=self._profile.name,
+            on_switcher_click=self._open_switcher_menu,
+            on_settings=lambda: self._on_settings(self._profile),
         )
         self._sidebar.pack(side="left", fill="y")
 
@@ -565,8 +596,8 @@ class MainShell(ttk.Frame):
         self._content = ttk.Frame(content_col)
         self._content.pack(fill="both", expand=True, padx=24, pady=(8, 20))
 
-    def _select(self, key: str) -> None:
-        if key == self._current_key:
+    def _select(self, key: str, *, force: bool = False) -> None:
+        if key == self._current_key and not force:
             return
         self._current_key = key
         self._sidebar.set_active(key)
@@ -587,6 +618,59 @@ class MainShell(ttk.Frame):
         elif key == "available":
             BestAvailableScreen(self._content)
 
+    def _open_switcher_menu(self) -> None:
+        profile_ui.post_profile_menu(
+            self._sidebar,
+            on_switch=self._switch_to,
+            on_add=self._open_add_league,
+            on_manage=self._open_manage_leagues,
+        )
+
+    def _open_add_league(self) -> None:
+        # create_and_sync_profile already applied + synced the new profile and
+        # made it active by the time this fires -- just reflect that, no need
+        # to run switch_to_profile's resync a second time.
+        profile_ui.AddLeagueDialog(self.winfo_toplevel(), on_created=self._on_switch_done)
+
+    def _open_manage_leagues(self) -> None:
+        profile_ui.ManageLeaguesDialog(self.winfo_toplevel(), on_changed=self._sync_from_store)
+
+    def _sync_from_store(self) -> None:
+        """After Manage Leagues changes something (rename/remove/switch),
+        pull whatever's now active and reflect it -- profile_ui.py already
+        applied it if a switch happened, this just updates our own display."""
+        store = profiles.load_profile_store()
+        active = profiles.get_active_profile(store) if store else None
+        if active is None:
+            return
+        self._profile = active
+        self._sidebar.set_league_name(active.name)
+        self._select(self._current_key or "chat", force=True)
+
+    def _switch_to(self, profile: profiles.Profile) -> None:
+        if profile.profile_id == self._profile.profile_id:
+            return
+        self._sidebar.set_switching(True)
+        self._sidebar.set_sync_status(f"Switching to {profile.name}...")
+        profile_ui.switch_to_profile(
+            self,
+            profile,
+            on_status=self._sidebar.set_sync_status,
+            on_done=lambda: self._on_switch_done(profile),
+            on_error=self._on_switch_error,
+        )
+
+    def _on_switch_done(self, profile: profiles.Profile) -> None:
+        self._profile = profile
+        self._sidebar.set_league_name(profile.name)
+        self._sidebar.set_sync_status("")
+        self._sidebar.set_switching(False)
+        self._select(self._current_key or "chat", force=True)
+
+    def _on_switch_error(self, message: str) -> None:
+        self._sidebar.set_sync_status(f"Switch failed: {message}")
+        self._sidebar.set_switching(False)
+
 
 class FantasyAgentUserApp:
     def __init__(self, root: tk.Tk) -> None:
@@ -601,10 +685,11 @@ class FantasyAgentUserApp:
         self._container = ttk.Frame(root)
         self._container.pack(fill="both", expand=True)
 
-        existing = user_config.load_user_config()
-        if existing is not None:
-            user_config.apply_user_config(existing)
-            self._show_main(existing)
+        store = profiles.load_profile_store()
+        active = profiles.get_active_profile(store) if store else None
+        if active is not None:
+            profiles.apply_profile(active)
+            self._show_main(active)
         else:
             self._show_setup(prefill=None)
 
@@ -612,13 +697,13 @@ class FantasyAgentUserApp:
         for child in self._container.winfo_children():
             child.destroy()
 
-    def _show_setup(self, prefill: user_config.UserConfig | None) -> None:
+    def _show_setup(self, prefill: profiles.Profile | None) -> None:
         self._clear()
         SetupScreen(self._container, on_complete=self._show_main, prefill=prefill)
 
-    def _show_main(self, config: user_config.UserConfig) -> None:
+    def _show_main(self, profile: profiles.Profile) -> None:
         self._clear()
-        MainShell(self._container, config=config, on_settings=self._show_setup)
+        MainShell(self._container, profile=profile, on_settings=self._show_setup)
 
 
 def main() -> None:
