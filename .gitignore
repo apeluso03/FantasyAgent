@@ -27,3 +27,6 @@ htmlcov/
 # PyInstaller build output (regenerate with build_exe.bat / pyinstaller FantasyAgent.spec)
 build/
 dist/
+
+# eval run output (one JSON per run)
+evals/results/
