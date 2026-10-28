@@ -50,10 +50,10 @@ def test_start_rankings_sync_runs_job_to_completion(client, monkeypatch):
     calls = []
     monkeypatch.setattr(sync_router, "sync_rankings_all", lambda page, force: calls.append((page, force)))
 
-    resp = client.post("/api/rankings/sync", json={"force": True, "page": "dynasty-superflex-overall"})
+    resp = client.post("/api/rankings/sync", json={"force": True, "page": "dynasty-superflex"})
     assert resp.status_code == 202
     job_id = resp.json()["job_id"]
-    assert calls == [("dynasty-superflex-overall", True)]
+    assert calls == [("dynasty-superflex", True)]
     assert client.get(f"/api/jobs/{job_id}").json()["status"] == "done"
 
 

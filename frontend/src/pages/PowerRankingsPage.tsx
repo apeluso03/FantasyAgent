@@ -1,4 +1,5 @@
 import { Badge } from "@/components/ui/Badge";
+import { InjuryTag } from "@/components/ui/InjuryTag";
 import { QueryBoundary } from "@/components/ui/QueryBoundary";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { usePowerRankings } from "@/hooks/usePowerRankings";
@@ -53,13 +54,31 @@ export function PowerRankingsPage() {
                     {team.starters.map((slot, i) => (
                       <div key={i} className="flex items-center justify-between py-1.5 text-sm">
                         <span className="w-20 shrink-0 text-xs font-medium text-neutral-500">{slot.slot}</span>
-                        <span className="flex-1">{slot.name ?? "(empty)"}</span>
+                        <span className="flex flex-1 items-center gap-1.5">
+                          {slot.name ?? "(empty)"}
+                          <InjuryTag status={slot.injury_status} />
+                        </span>
                         <span className="text-xs text-neutral-500">
                           {slot.rank_ecr != null ? `#${slot.rank_ecr}` : "unranked"}
                         </span>
                       </div>
                     ))}
                   </div>
+
+                  {team.injured_players.length > 0 && (
+                    <div className="mt-3 border-t border-neutral-100 pt-2 dark:border-neutral-800">
+                      <p className="text-xs font-medium text-neutral-500">Injuries</p>
+                      <div className="mt-1.5 space-y-1">
+                        {team.injured_players.map((note) => (
+                          <div key={note.player_id} className="flex items-center gap-1.5 text-sm">
+                            <InjuryTag status={note.injury_status} />
+                            <span className="font-medium">{note.name}</span>
+                            <span className="text-xs text-neutral-500">{note.reason}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </details>
               ))}
             </div>

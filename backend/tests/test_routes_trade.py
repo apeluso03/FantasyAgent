@@ -44,6 +44,36 @@ def test_evaluate_trade_matches_cli_pipeline(client, db):
     assert body["side_a"]["team_name"] == "Team A"
 
 
+def test_evaluate_trade_surfaces_injury_fields(client, db):
+    _seed(db)
+    db.query(PlayerRecord).filter_by(player_id="qb_trade").update(
+        {"injury_status": "Out", "injury_body_part": "Hamstring"}
+    )
+    db.commit()
+
+    resp = client.post(
+        "/api/trade/evaluate",
+        json={
+            "side_a_owner": OWNER_A,
+            "side_a_gives": ["qb_trade"],
+            "side_b_owner": OWNER_B,
+            "side_b_gives": ["rb_trade"],
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+
+    given = body["side_a"]["injured_players_given"]
+    assert len(given) == 1
+    assert given[0]["name"] == "Traded QB"
+    assert given[0]["injury_status"] == "Out"
+    assert given[0]["multiplier"] == 0.75
+
+    received = body["side_b"]["injured_players_received"]
+    assert len(received) == 1
+    assert received[0]["name"] == "Traded QB"
+
+
 def test_evaluate_trade_unknown_owner_returns_409(client, db):
     _seed(db)
     resp = client.post(

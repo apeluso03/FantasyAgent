@@ -91,6 +91,14 @@ class PlayerRecord(Base):
     fantasy_positions: Mapped[list] = mapped_column(JSON, default=list)
     status: Mapped[str | None] = mapped_column(String, nullable=True)
     active: Mapped[bool | None] = mapped_column(nullable=True)
+    # Added for injury-adjusted values (trade.py's adjusted_player_value) --
+    # all nullable since most players have none of these set. See
+    # db/session.py's init_db() for how an existing SQLite file picks these
+    # columns up without a full resync.
+    injury_status: Mapped[str | None] = mapped_column(String, nullable=True)
+    injury_body_part: Mapped[str | None] = mapped_column(String, nullable=True)
+    injury_notes: Mapped[str | None] = mapped_column(String, nullable=True)
+    injury_start_date: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class SyncMeta(Base):

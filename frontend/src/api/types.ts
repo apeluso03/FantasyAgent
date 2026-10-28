@@ -44,6 +44,16 @@ export interface MyRoster {
   players: RosterPlayer[];
 }
 
+// Mirrors backend InjuryNoteOut -- shared by power rankings and trade
+// results, same injury-adjusted-value detail in both.
+export interface InjuryNote {
+  player_id: string;
+  name: string;
+  injury_status: string;
+  multiplier: number;
+  reason: string;
+}
+
 export interface StarterSlot {
   slot: string;
   player_id: string | null;
@@ -51,6 +61,7 @@ export interface StarterSlot {
   position: string | null;
   rank_ecr: number | null;
   value: number;
+  injury_status: string | null;
 }
 
 export interface TeamPowerRanking {
@@ -62,6 +73,7 @@ export interface TeamPowerRanking {
   starters: StarterSlot[];
   positional_value: Record<string, number>;
   positional_rank: Record<string, number>;
+  injured_players: InjuryNote[];
 }
 
 export interface KeeperCandidate {
@@ -143,6 +155,8 @@ export interface TradeSideResult {
   position_counts_before: Record<string, number>;
   position_counts_after: Record<string, number>;
   reasoning: string;
+  injured_players_given: InjuryNote[];
+  injured_players_received: InjuryNote[];
 }
 
 export interface TradeEvaluation {

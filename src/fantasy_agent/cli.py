@@ -2,6 +2,7 @@
 
 Usage:
     fantasy-agent sync
+    fantasy-agent refresh
     fantasy-agent league
     fantasy-agent rosters
     fantasy-agent players --search "mahomes"
@@ -18,9 +19,11 @@ Usage:
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
 
 import typer
+from sqlalchemy.orm import Session
 
 from .agent.core import run_agent
 from .agent.tools import ToolError, resolve_owner
@@ -31,12 +34,43 @@ from .draft import get_best_available
 from .keeper import compute_keeper_candidates
 from .power_rankings import compute_power_rankings
 from .roster_analysis import STANDARD_POSITIONS
-from .sync import sync_all, sync_rankings_all
+from .sync import get_last_synced, refresh_caches, sync_all, sync_rankings_all
 from .trade import evaluate_trade
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+
+# Sleeper's real injury_status values, abbreviated for compact CLI/table
+# display -- anything not listed here (e.g. "NA") just shows uppercased.
+_INJURY_TAGS = {"questionable": "Q", "doubtful": "D", "out": "O", "ir": "IR", "pup": "PUP", "sus": "SUS"}
+
+
+def _injury_tag(status: str | None) -> str:
+    if not status:
+        return ""
+    return f"[{_INJURY_TAGS.get(status.lower(), status.upper())}]"
+
+
+def _format_age(age: dt.timedelta | None) -> str:
+    if age is None:
+        return "never synced"
+    hours = age.total_seconds() / 3600
+    if hours < 1:
+        return f"{int(age.total_seconds() // 60)}m ago"
+    return f"{hours:.1f}h ago"
+
+
+def _print_values_as_of(session: Session) -> None:
+    """Prints how fresh the cached data behind a trade/rosters command's
+    numbers actually is, from SyncMeta -- so it's never ambiguous whether
+    you're looking at today's injury report or last week's."""
+    now = dt.datetime.now(dt.timezone.utc)
+    players_synced = get_last_synced(session, "players")
+    rankings_synced = get_last_synced(session, f"rankings:{settings.fantasypros_ranking_page}")
+    players_age = now - players_synced if players_synced else None
+    rankings_age = now - rankings_synced if rankings_synced else None
+    typer.echo(f"Values as of: players {_format_age(players_age)}, rankings {_format_age(rankings_age)}")
 
 
 @app.command()
@@ -49,6 +83,29 @@ def sync(
     """Pull league, users, rosters, and (if stale) the player database into the local cache."""
     sync_all(league_id, force_players=force_players)
     typer.echo("Sync complete.")
+
+
+@app.command()
+def refresh() -> None:
+    """Refresh the player and rankings caches, each respecting its own TTL --
+    safe to run on a schedule (e.g. Windows Task Scheduler) since a still-
+    fresh cache is just a no-op. Prints what was actually refreshed vs.
+    skipped as still fresh."""
+    result = refresh_caches()
+
+    if result.players_refreshed:
+        typer.echo(f"players: refreshed ({result.players_synced_count} players)")
+    else:
+        typer.echo(f"players: skipped, still fresh ({_format_age(result.players_age)})")
+
+    if not result.rankings_refreshed:
+        typer.echo(f"rankings: skipped, still fresh ({_format_age(result.rankings_age)})")
+    elif not result.rankings_results:
+        typer.echo("rankings: refresh ran but found nothing to sync -- run `fantasy-agent sync` first?")
+    for r in result.rankings_results:
+        typer.echo(f"rankings ({r.page}): refreshed ({r.total} ranked, {r.matched} matched)")
+        if r.unmatched:
+            typer.echo(f"  {len(r.unmatched)} unmatched -- run `fantasy-agent rankings-unmatched --page {r.page}` to review")
 
 
 @app.command()
@@ -77,6 +134,7 @@ def rosters(
             typer.echo(str(exc))
             raise typer.Exit(code=1) from exc
 
+        _print_values_as_of(session)
         for team in teams:
             avg = f"#{team.average_starter_rank:.0f}" if team.average_starter_rank is not None else "n/a"
             positional = "  ".join(f"{pos}:#{team.positional_rank[pos]}" for pos in STANDARD_POSITIONS)
@@ -88,7 +146,11 @@ def rosters(
                 for slot in team.starters:
                     label = slot.name or "(empty)"
                     rank_label = f"#{slot.rank_ecr}" if slot.rank_ecr is not None else "unranked"
-                    typer.echo(f"      {slot.slot:<11} {label:<25} {rank_label}")
+                    tag = _injury_tag(slot.injury_status)
+                    typer.echo(f"      {slot.slot:<11} {label:<25} {rank_label:<10} {tag}")
+            if team.injured_players:
+                flagged = ", ".join(f"{p.name} {_injury_tag(p.injury_status)}" for p in team.injured_players)
+                typer.echo(f"      Injuries: {flagged}")
 
 
 @app.command()
@@ -113,27 +175,28 @@ def players(
 
 @app.command()
 def rankings_sync(
-    page: str = typer.Option(settings.fantasypros_ranking_page, help="FantasyPros rankings page slug."),
+    page: str = typer.Option(None, help="One FantasyPros rankings page slug (default: every weekly/ROS/dynasty page)."),
     force: bool = typer.Option(False, "--force", help="Re-scrape even if the cache is fresh."),
 ) -> None:
     """Scrape FantasyPros rankings and match players to cached Sleeper IDs."""
     try:
-        result = sync_rankings_all(page, force=force)
+        results = sync_rankings_all(page, force=force)
     except RuntimeError as exc:
         typer.echo(str(exc))
         raise typer.Exit(code=1) from exc
 
-    if result is None:
+    if not results:
         typer.echo("Rankings cache is still fresh — nothing to do (use --force to override).")
         return
 
-    typer.echo(f"Synced {result.total} ranked players from '{result.page}': {result.matched} matched.")
-    if result.unmatched:
-        typer.echo(f"{len(result.unmatched)} unmatched - run `fantasy-agent rankings-unmatched` to review:")
-        for fp_id, name, position in result.unmatched[:10]:
-            typer.echo(f"  fp_id={fp_id:<8} {name:<25} {position}")
-        if len(result.unmatched) > 10:
-            typer.echo(f"  ... and {len(result.unmatched) - 10} more")
+    for result in results:
+        typer.echo(f"Synced {result.total} ranked players from '{result.page}': {result.matched} matched.")
+        if result.unmatched:
+            typer.echo(f"  {len(result.unmatched)} unmatched - run `fantasy-agent rankings-unmatched --page {result.page}` to review:")
+            for fp_id, name, position in result.unmatched[:10]:
+                typer.echo(f"    fp_id={fp_id:<8} {name:<25} {position}")
+            if len(result.unmatched) > 10:
+                typer.echo(f"    ... and {len(result.unmatched) - 10} more")
 
 
 @app.command()
@@ -244,6 +307,10 @@ def trade(
             typer.echo(str(exc))
             raise typer.Exit(code=1) from exc
 
+        _print_values_as_of(session)
+        typer.echo("")
+        # Injury-adjusted detail is already folded into `reasoning` below
+        # (trade.py's _injury_reasoning_note), so it shows up here for free.
         typer.echo(f"{result.side_a.team_name}: {result.side_a.reasoning}")
         typer.echo("")
         typer.echo(f"{result.side_b.team_name}: {result.side_b.reasoning}")

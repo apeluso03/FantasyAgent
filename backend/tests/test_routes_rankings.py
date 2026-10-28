@@ -47,3 +47,28 @@ def test_power_rankings_ranks_teams(client, db):
     body = resp.json()
     assert body[0]["team_name"] == "Team A"
     assert body[0]["rank"] == 1
+
+
+def test_power_rankings_surfaces_injury_fields(client, db):
+    db.add(LeagueRecord(league_id=LEAGUE_ID, name="L", season="2026", total_rosters=1,
+                         roster_positions=["QB", "BN"]))
+    db.add(UserRecord(user_id=OWNER_ID, league_id=LEAGUE_ID, display_name="A", team_name="Team A"))
+    db.add(PlayerRecord(player_id="p1", full_name="Mahomes", team="KC", position="QB",
+                         injury_status="Questionable", injury_body_part="Ankle"))
+    _seed_rankings(db)
+    db.add(RosterRecord(league_id=LEAGUE_ID, roster_id=1, owner_id=OWNER_ID, players=["p1"], starters=["p1"]))
+    db.commit()
+
+    resp = client.get("/api/power-rankings")
+    assert resp.status_code == 200
+    team = resp.json()[0]
+
+    qb_slot = next(s for s in team["starters"] if s["slot"] == "QB")
+    assert qb_slot["injury_status"] == "Questionable"
+
+    assert len(team["injured_players"]) == 1
+    note = team["injured_players"][0]
+    assert note["name"] == "Mahomes"
+    assert note["injury_status"] == "Questionable"
+    assert note["multiplier"] == 0.95
+    assert "Ankle" in note["reason"]

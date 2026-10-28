@@ -7,6 +7,7 @@ const TONES = {
   brand: "bg-celadon-light text-hunter-dark dark:bg-hunter-dark dark:text-celadon-light",
   good: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
   bad: "bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300",
+  warning: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300",
 } as const;
 
 export function Badge({ children, tone = "neutral" }: { children: ReactNode; tone?: keyof typeof TONES }) {

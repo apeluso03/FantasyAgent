@@ -7,14 +7,21 @@ Ranks every roster 1..N two ways, both from live FantasyPros rankings:
    SUPER_FLEX is a greedy assignment (exact-position slots first, using each
    position's best remaining player, then FLEX from remaining RB/WR/TE, then
    SUPER_FLEX from remaining QB/RB/WR/TE) rather than a true optimal-assignment
-   solver -- good enough in practice, and easy to explain.
+   solver -- good enough in practice, and easy to explain. Players whose
+   injury_status is in Settings.unavailable_injury_statuses (Out/IR/PUP/Sus
+   by default) are skipped by the greedy fill entirely -- they can't occupy a
+   starting slot, so the next-best healthy (or Questionable/Doubtful, which
+   can still start) option takes it instead.
 2. Positional: for QB/RB/WR/TE, each team's *whole-roster* value at that
    position (not just starters) ranked against the other teams, to surface
    depth/strength by position rather than just who's in the lineup today.
+   This one includes every rostered player regardless of availability -- an
+   injured star still has value, they just aren't starting right now.
 
 Both use the same rank-to-value curve as the trade analyzer
-(`trade.player_value`), so power rankings and trade-value numbers stay on
-one consistent scale across the app.
+(`trade.player_value`, injury-adjusted via `trade.adjusted_player_value`), so
+power rankings and trade-value numbers stay on one consistent scale across
+the app.
 """
 
 from __future__ import annotations
@@ -26,7 +33,7 @@ from sqlalchemy.orm import Session
 from .config import settings
 from .db.models import LeagueRecord, PlayerRecord, RankingRecord, RosterRecord, UserRecord
 from .roster_analysis import STANDARD_POSITIONS
-from .trade import player_value
+from .trade import AdjustedValue, InjuryNote, adjusted_player_value
 
 FLEX_ELIGIBLE = ("RB", "WR", "TE")
 SUPER_FLEX_ELIGIBLE = ("QB", "RB", "WR", "TE")
@@ -42,6 +49,7 @@ class StarterSlot:
     position: str | None
     rank_ecr: int | None
     value: float
+    injury_status: str | None = None
 
 
 @dataclass
@@ -54,6 +62,15 @@ class TeamPowerRanking:
     starters: list[StarterSlot]
     positional_value: dict[str, float] = field(default_factory=dict)
     positional_rank: dict[str, int] = field(default_factory=dict)
+    # Every rostered player with a non-empty injury_status, healthy-enough-to-
+    # start or not -- see InjuryNote. A quick "who's banged up" summary.
+    injured_players: list[InjuryNote] = field(default_factory=list)
+
+
+def _is_unavailable(player: PlayerRecord | None) -> bool:
+    if player is None or not player.injury_status:
+        return False
+    return player.injury_status.lower() in settings.unavailable_injury_statuses
 
 
 def _fill_starting_lineup(
@@ -64,9 +81,9 @@ def _fill_starting_lineup(
 ) -> list[StarterSlot]:
     remaining = list(roster_player_ids)
 
-    def value_of(pid: str) -> float:
+    def adjusted(pid: str) -> AdjustedValue:
         ranking = rank_by_player.get(pid)
-        return player_value(ranking.rank_ecr if ranking else None)
+        return adjusted_player_value(ranking.rank_ecr if ranking else None, players_by_id.get(pid))
 
     def position_of(pid: str) -> str | None:
         player = players_by_id.get(pid)
@@ -77,7 +94,10 @@ def _fill_starting_lineup(
             candidates = [pid for pid in remaining if position_of(pid) == exact]
         else:
             candidates = [pid for pid in remaining if position_of(pid) in eligible]
-        return max(candidates, key=value_of) if candidates else None
+        # Out/IR/PUP/Sus players can't occupy a starting slot -- Questionable/
+        # Doubtful still can, just at their (already lower) adjusted value.
+        available = [pid for pid in candidates if not _is_unavailable(players_by_id.get(pid))]
+        return max(available, key=lambda pid: adjusted(pid).value) if available else None
 
     starter_slots = [s for s in roster_positions if s not in NON_STARTER_SLOTS]
     ordered = (
@@ -106,6 +126,7 @@ def _fill_starting_lineup(
         remaining.remove(pid)
         player = players_by_id.get(pid)
         ranking = rank_by_player.get(pid)
+        adj = adjusted(pid)
         results.append(
             StarterSlot(
                 slot=slot,
@@ -113,7 +134,8 @@ def _fill_starting_lineup(
                 name=(player.full_name if player else None) or pid,
                 position=position_of(pid),
                 rank_ecr=ranking.rank_ecr if ranking else None,
-                value=value_of(pid),
+                value=adj.value,
+                injury_status=adj.injury_status,
             )
         )
     return results
@@ -130,8 +152,34 @@ def _positional_value(
         if player is None or player.position not in totals:
             continue
         ranking = rank_by_player.get(pid)
-        totals[player.position] += player_value(ranking.rank_ecr if ranking else None)
+        totals[player.position] += adjusted_player_value(ranking.rank_ecr if ranking else None, player).value
     return totals
+
+
+def _injured_players(
+    roster_player_ids: list[str],
+    players_by_id: dict[str, PlayerRecord],
+    rank_by_player: dict[str, RankingRecord],
+) -> list[InjuryNote]:
+    notes: list[InjuryNote] = []
+    for pid in roster_player_ids:
+        player = players_by_id.get(pid)
+        if player is None or not player.injury_status:
+            continue
+        ranking = rank_by_player.get(pid)
+        adj = adjusted_player_value(ranking.rank_ecr if ranking else None, player)
+        if not adj.injury_status:
+            continue
+        notes.append(
+            InjuryNote(
+                player_id=pid,
+                name=player.full_name or pid,
+                injury_status=adj.injury_status,
+                multiplier=adj.multiplier,
+                reason=adj.reason,
+            )
+        )
+    return notes
 
 
 def compute_power_rankings(
@@ -186,6 +234,7 @@ def compute_power_rankings(
                 average_starter_rank=avg_rank,
                 starters=starters,
                 positional_value=_positional_value(roster.players, players_by_id, rank_by_player),
+                injured_players=_injured_players(roster.players, players_by_id, rank_by_player),
             )
         )
 

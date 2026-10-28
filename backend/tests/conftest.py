@@ -25,7 +25,7 @@ from backend.app.main import app
 
 LEAGUE_ID = "league1"
 OWNER_ID = "owner1"
-PAGE = "dynasty-superflex-overall"
+PAGE = "dynasty-superflex"
 
 settings.sleeper_league_id = LEAGUE_ID
 settings.sleeper_owner_user_id = OWNER_ID

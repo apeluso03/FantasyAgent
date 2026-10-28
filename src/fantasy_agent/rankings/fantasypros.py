@@ -87,12 +87,21 @@ class FantasyProsClient:
         self._client.close()
 
     def fetch_rankings(self, page: str) -> list[RankedPlayer]:
-        """Fetch a rankings page (e.g. "dynasty-superflex-overall") and parse the
+        """Fetch a rankings page (e.g. "dynasty-superflex") and parse the
         players out of its embedded ecrData JSON."""
         url = f"{self._base_url}/{page}.php"
         response = self._client.get(url)
         if response.status_code != 200:
             raise FantasyProsScrapeError(f"GET {url} -> {response.status_code}")
+        # FantasyPros redirects an unknown slug to its redraft cheat sheet
+        # (consensus-cheatsheets.php), which parses fine -- so without this the
+        # wrong rankings get stored under the requested page's name, silently.
+        # This happened: "dynasty-superflex-overall" was never a real page.
+        landed_on = response.url.path.rsplit("/", 1)[-1]
+        if landed_on != f"{page}.php":
+            raise FantasyProsScrapeError(
+                f"GET {url} redirected to {response.url} -- '{page}' isn't a FantasyPros rankings page"
+            )
 
         raw_json = _extract_balanced_json(response.text, _ECR_DATA_MARKER)
         try:

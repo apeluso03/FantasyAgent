@@ -109,18 +109,20 @@ database engine a deployment would use; see `docker-compose.yml`'s comments.
 
 ## Usage
 
-### CLI (unchanged since the original MVP)
+### CLI
 
 ```bash
 # --- Data layer: pull everything into the local cache ---
 fantasy-agent sync                          # league, rosters, users, players, draft history
+fantasy-agent refresh                       # just players + rankings, each respecting its own TTL
+                                             # -- safe to run on a schedule (e.g. Task Scheduler)
 fantasy-agent league                        # cached league settings
 fantasy-agent rosters                       # power-rank every team 1-N, with QB/RB/WR/TE breakdown
-fantasy-agent rosters --detail              # + each team's best starting lineup
+fantasy-agent rosters --detail              # + each team's best starting lineup, with injury tags
 fantasy-agent players --search "mahomes"    # sanity-check the player cache
 
 # --- Rankings: scrape FantasyPros, match to Sleeper player IDs ---
-fantasy-agent rankings-sync                 # scrape + match (rate-limited, cached ~20h)
+fantasy-agent rankings-sync                 # scrape + match every weekly/ROS/dynasty page (cached ~6h each)
 fantasy-agent rankings-show --search "mahomes"
 fantasy-agent rankings-unmatched            # players the matcher couldn't resolve
 fantasy-agent rankings-alias <fp_id> <sleeper_id>   # manual override for a bad/no match
@@ -128,7 +130,7 @@ fantasy-agent rankings-alias <fp_id> <sleeper_id>   # manual override for a bad/
 # --- Pure data-pipeline tools (no LLM) ---
 fantasy-agent keepers                       # rank your roster's keeper candidates
 fantasy-agent trade --side-a-owner <id> --side-a-gives p1,p2 \
-                     --side-b-owner <id> --side-b-gives p3
+                     --side-b-owner <id> --side-b-gives p3   # injury-adjusted value on both sides
 fantasy-agent best-available                # live draft board (polls Sleeper fresh every call)
 
 # --- The agent itself ---
@@ -138,9 +140,13 @@ fantasy-agent ask "should I keep Bijan Robinson or draft fresh?"
 `players/nfl` is a multi-MB dump Sleeper asks callers not to poll frequently, so it's only
 re-pulled when the cache is older than `PLAYERS_CACHE_TTL_HOURS` (default 24h; `sync
 --force-players` bypasses that during draft week). FantasyPros rankings are cached the same
-way, on `RANKINGS_CACHE_TTL_HOURS`. The agent never scrapes or hits Sleeper live mid-conversation
-— with one deliberate exception: `best-available` polls the draft endpoint fresh on every call,
-because "who's been picked" can't be allowed to go stale during a live draft.
+way, on `RANKINGS_CACHE_TTL_HOURS` (default 6h — can be lowered further in-season if needed). The
+agent never scrapes or hits Sleeper live mid-conversation — with one deliberate exception:
+`best-available` polls the draft endpoint fresh on every call, because "who's been picked" can't
+be allowed to go stale during a live draft. `rosters` and `trade` both print a "Values as of" line
+so it's always clear how fresh the numbers behind them are; `refresh` is the lightweight command to
+actually keep that fresh without re-pulling league/roster data every time (see "Data sources and
+caching" below).
 
 ### Web app
 
@@ -155,7 +161,7 @@ light/dark mode.
 ## Tests
 
 ```bash
-pytest                              # domain layer + CLI (83 tests)
+pytest                              # domain layer + CLI (100 tests)
 pytest backend/tests                # FastAPI routes (51 tests)
 cd frontend && npm test             # React components (9 tests)
 ```
@@ -253,17 +259,50 @@ automatically, so there's no client-side cache bookkeeping to do here.
 
 | Source | What | Cache policy |
 |---|---|---|
-| Sleeper API | league, rosters, users, full player DB, draft history | `sync`; players/nfl gated by TTL (large, rate-sensitive) |
+| Sleeper API | league, rosters, users, full player DB (incl. injury status), draft history | `sync`; players/nfl gated by TTL (large, rate-sensitive) |
 | Sleeper API | current draft's live picks | **never cached** — polled fresh every `best-available` call |
-| FantasyPros | dynasty/superflex consensus rankings | `rankings-sync`; TTL-gated, scraped politely (see below) |
+| FantasyPros | consensus rankings: weekly, rest-of-season, and dynasty, for superflex and 1-QB | `rankings-sync`; TTL-gated per page, scraped politely (see below) |
+
+`PLAYERS_CACHE_TTL_HOURS` defaults to 24h, matching Sleeper's ask to pull the full player dump
+sparingly. `RANKINGS_CACHE_TTL_HOURS` defaults to 6h — low enough that trade/keeper/power-rankings
+values don't lag a whole news cycle, without re-scraping FantasyPros on every page load. Both can
+be lowered further in-season (e.g. around a Tuesday/Wednesday injury-report day) if 6h still feels
+stale; FantasyPros is scraped politely regardless (four pages per full `rankings-sync` run, 5s
+apart per `robots.txt`'s crawl-delay), this setting only controls how often `fantasy-agent refresh` is
+willing to re-scrape.
+
+**Which rankings answer which question** (`rankings/pages.py`). Each question has a time horizon,
+and the agent's tools pick the matching page for the league's format on their own:
+
+| Horizon | Used for | Superflex page | 1-QB page |
+|---|---|---|---|
+| `ros` (rest of season) | the default: trades ("win now"), rosters, power rankings | `ros-ppr-superflex-derived` | `ros-ppr-overall` |
+| `weekly` | this week's start/sit | `ppr-superflex` | `ppr-superflex` |
+| `dynasty` | keepers, explicit long-term questions, teams out of the playoff race | `dynasty-superflex` | `dynasty-overall` |
+
+FantasyPros doesn't publish rest-of-season *superflex* rankings, so that page is derived during
+sync: the 1-QB rest-of-season order is kept within QBs and within skill players, and QBs are
+re-slotted among skill players using the weekly superflex page's spacing ("the 3rd QB goes after
+the 4th skill player"). Trades default to win-now; the agent switches to dynasty value when asked,
+or when the team it's advising is a playoff long shot (`standings.py` -- games back of the last
+playoff seed vs. games left).
+
+**Keeping values fresh.** `fantasy-agent refresh` runs the player sync and the rankings sync
+together, each still respecting its own TTL (so running it hourly, say from Windows Task
+Scheduler, is harmless — most runs will just report both as still fresh). It's the same thing a
+schedule should call instead of the heavier `fantasy-agent sync` (which also re-pulls
+league/roster/user data and draft history every time). Both the `rosters` and `trade` CLI commands
+print a "Values as of" line from the cache's actual sync timestamps, so it's never ambiguous how
+stale a given trade verdict or power ranking is.
 
 **FantasyPros scraping approach.** The spec called for Playwright, matching prior scraping
 experience — but FantasyPros' rankings pages embed the full ranked-player list as a JSON blob
 directly in a `<script>` tag (`var ecrData = {...}`), so a plain `httpx` GET plus a
 balanced-brace JSON extraction (`rankings/fantasypros.py`) gets the same data without a headless
 browser. `robots.txt` disallows the interactive `/nfl/ranker/` tool but not `/nfl/rankings/`
-pages, and asks for a 5s crawl-delay; the scraper pulls one page per `rankings-sync` run and is
-always read from cache during agent conversations, never scraped on demand.
+pages, and asks for a 5s crawl-delay; the scraper pulls a handful of pages per `rankings-sync` run,
+refuses a response that was redirected to a different page (FantasyPros silently sends unknown
+slugs to its redraft cheat sheet), and is always read from cache during agent conversations, never scraped on demand.
 
 **Player-ID matching** (`rankings/matching.py`) is the fiddly part the spec calls out. FantasyPros
 and Sleeper name players differently (suffixes, punctuation, nicknames) and represent defenses
@@ -284,9 +323,22 @@ is a simple opportunity-cost comparison against the replacement-level player you
 draft slot — explainable, not a precise valuation model.
 
 **Trade value model** (`trade.py`). Each player's rank is converted to a comparable value via a
-monotonic exponential decay curve, similar in spirit to public dynasty trade charts. Roster-need
-impact (does the trade fill a hole or add to a surplus) is computed from before/after position
-counts against the league's starter requirements.
+monotonic exponential decay curve (`player_value`), similar in spirit to public dynasty trade
+charts. Roster-need impact (does the trade fill a hole or add to a surplus) is computed from
+before/after position counts against the league's starter requirements.
+
+`adjusted_player_value()` layers a modest injury discount on top of that same curve — a flat
+multiplier per Sleeper `injury_status` (Questionable 0.95, Doubtful 0.85, Out 0.75, IR/PUP/Sus
+0.5; tunable in `config.py`'s `injury_value_multipliers`), not a separate risk model. This is a
+keeper league and FantasyPros' own rankings already partly price injuries in, so the point is a
+small, explainable nudge, not a competing valuation system. A status with no configured
+multiplier (Sleeper's data has a few beyond the common ones, e.g. `NA`) falls back to 1.0 and logs
+a warning rather than guessing. `trade.evaluate_trade()` uses the adjusted value for both sides'
+`value_given`/`value_received`, and each `TradeSideResult` carries structured
+`injured_players_given`/`injured_players_received` lists (name, status, multiplier, a short
+reason like `"Out (Hamstring): value x0.75"`) alongside a short injury note folded into
+`reasoning` — so a trade verdict shows exactly which players were discounted and why, not just the
+adjusted numbers.
 
 **Superflex-awareness in the draft assistant** (`draft.py`) comes from the data source, not extra
 logic: rankings are scraped from FantasyPros' *superflex* consensus page, so QBs are already
@@ -303,8 +355,19 @@ explain (and it's what correctly stacks a second elite QB into SUPER_FLEX over a
 option). Alongside the overall rank, each team also gets a QB/RB/WR/TE positional rank computed
 from *whole-roster* value at that position — this is what actually answers "where is this team
 strong or thin," since a team can have a great starting lineup while sitting on zero bench depth
-at a position, or vice versa. Both use the same `trade.player_value` curve as the trade analyzer,
-so power rankings and trade values stay on one consistent scale.
+at a position, or vice versa. Both use the same injury-adjusted `trade.adjusted_player_value` curve
+as the trade analyzer, so power rankings and trade values stay on one consistent scale.
+
+Injury status feeds the starting-lineup fill directly: a player whose status is Out, IR, PUP, or
+Sus (`Settings.unavailable_injury_statuses`) can't occupy a starting slot at all — the greedy fill
+skips straight to the next-best available option, same as if that slot were empty for them.
+Questionable and Doubtful players can still start, just at their (already slightly lower) adjusted
+value. The whole-roster *positional* value is unaffected by any of this — it includes every
+rostered player regardless of availability, since an injured star still has trade/keeper value,
+they just aren't filling a lineup slot this week. Each `StarterSlot` carries its player's
+`injury_status`, and each `TeamPowerRanking` carries an `injured_players` list (anyone on the
+roster with a non-empty status, not just the unavailable ones) for a quick "who's banged up" view
+per team.
 
 ### Accounts (new in the web migration)
 

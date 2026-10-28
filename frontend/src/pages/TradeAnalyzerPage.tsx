@@ -1,6 +1,7 @@
 import { useState } from "react";
 
-import type { Team, TradeSideResult } from "@/api/types";
+import type { InjuryNote, Team, TradeSideResult } from "@/api/types";
+import { InjuryTag } from "@/components/ui/InjuryTag";
 import { PlayerAvatar } from "@/components/ui/PlayerAvatar";
 import { QueryBoundary } from "@/components/ui/QueryBoundary";
 import { Skeleton } from "@/components/ui/Skeleton";
@@ -120,6 +121,22 @@ function RosterPicker({
   );
 }
 
+function InjuryList({ label, notes }: { label: string; notes: InjuryNote[] }) {
+  if (notes.length === 0) return null;
+  return (
+    <div className="mt-2 space-y-1">
+      <p className="text-xs font-medium text-neutral-500">{label}</p>
+      {notes.map((note) => (
+        <div key={note.player_id} className="flex items-center gap-1.5 text-sm">
+          <InjuryTag status={note.injury_status} />
+          <span className="font-medium">{note.name}</span>
+          <span className="text-xs text-neutral-500">{note.reason}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function SideResult({ result }: { result: TradeSideResult }) {
   return (
     <div className="card">
@@ -130,6 +147,8 @@ function SideResult({ result }: { result: TradeSideResult }) {
         {result.net_value.toFixed(0)})
       </p>
       <p className="mt-2 text-sm text-neutral-600 dark:text-neutral-300">{result.reasoning}</p>
+      <InjuryList label="Injured, giving up" notes={result.injured_players_given} />
+      <InjuryList label="Injured, receiving" notes={result.injured_players_received} />
     </div>
   );
 }

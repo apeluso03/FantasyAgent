@@ -60,6 +60,20 @@ class MyRosterOut(BaseModel):
     players: list[RosterPlayerOut]
 
 
+class InjuryNoteOut(BaseModel):
+    """Mirrors trade.InjuryNote -- shared by power rankings and trade results
+    so an injured/unavailable player's status, value multiplier, and a short
+    human-readable reason show up the same way in both."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    player_id: str
+    name: str
+    injury_status: str
+    multiplier: float
+    reason: str
+
+
 class StarterSlotOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -69,6 +83,7 @@ class StarterSlotOut(BaseModel):
     position: str | None
     rank_ecr: int | None
     value: float
+    injury_status: str | None = None
 
 
 class TeamPowerRankingOut(BaseModel):
@@ -82,6 +97,7 @@ class TeamPowerRankingOut(BaseModel):
     starters: list[StarterSlotOut]
     positional_value: dict[str, float]
     positional_rank: dict[str, int]
+    injured_players: list[InjuryNoteOut] = Field(default_factory=list)
 
 
 class KeeperCandidateOut(BaseModel):
@@ -177,6 +193,8 @@ class TradeSideResultOut(BaseModel):
     position_counts_before: dict[str, int]
     position_counts_after: dict[str, int]
     reasoning: str
+    injured_players_given: list[InjuryNoteOut] = Field(default_factory=list)
+    injured_players_received: list[InjuryNoteOut] = Field(default_factory=list)
 
 
 class TradeEvaluationOut(BaseModel):
