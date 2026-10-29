@@ -120,6 +120,14 @@ class Player(BaseModel):
     age: int | None = None
     years_exp: int | None = None
     active: bool | None = None
+    # Distinct from `status` above (Active/Inactive/...) -- these describe a
+    # specific injury designation. See trade.py's INJURY_VALUE_MULTIPLIERS for
+    # the real-world values observed (Questionable, Doubtful, Out, IR, PUP,
+    # Sus, NA, plus rare ones like COV/DNR).
+    injury_status: str | None = None
+    injury_body_part: str | None = None
+    injury_notes: str | None = None
+    injury_start_date: str | None = None
 
     _coerce_positions = field_validator("fantasy_positions", mode="before")(_none_to_empty_list)
 

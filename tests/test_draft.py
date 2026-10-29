@@ -7,7 +7,7 @@ from fantasy_agent.draft import get_best_available
 
 LEAGUE_ID = "league1"
 OWNER = "owner1"
-PAGE = "dynasty-superflex-overall"
+PAGE = "dynasty-superflex"
 
 
 @pytest.fixture

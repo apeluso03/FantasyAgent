@@ -32,7 +32,7 @@ def _make_client(html: str, status: int = 200) -> FantasyProsClient:
 
 def test_fetch_rankings_parses_embedded_json_despite_decoy_braces():
     client = _make_client(FAKE_PAGE_HTML)
-    players = client.fetch_rankings("dynasty-superflex-overall")
+    players = client.fetch_rankings("dynasty-superflex")
     assert len(players) == 2
     assert players[0].name == "Patrick Mahomes II"
     assert players[0].fp_player_id == 1
@@ -42,13 +42,26 @@ def test_fetch_rankings_parses_embedded_json_despite_decoy_braces():
 def test_fetch_rankings_missing_ecr_data_raises():
     client = _make_client("<html>no data here</html>")
     with pytest.raises(FantasyProsScrapeError):
-        client.fetch_rankings("dynasty-superflex-overall")
+        client.fetch_rankings("dynasty-superflex")
 
 
 def test_fetch_rankings_http_error_raises():
     client = _make_client("nope", status=500)
     with pytest.raises(FantasyProsScrapeError):
-        client.fetch_rankings("dynasty-superflex-overall")
+        client.fetch_rankings("dynasty-superflex")
+
+
+def test_fetch_rankings_redirect_to_another_page_raises():
+    # FantasyPros sends unknown slugs to its redraft cheat sheet, which parses
+    # fine -- storing it under the requested name would be silently wrong.
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/not-a-real-page.php"):
+            return httpx.Response(302, headers={"Location": "https://fp.test/nfl/rankings/consensus-cheatsheets.php"})
+        return httpx.Response(200, text=FAKE_PAGE_HTML)
+
+    client = FantasyProsClient(base_url="https://fp.test/nfl/rankings", transport=httpx.MockTransport(handler))
+    with pytest.raises(FantasyProsScrapeError, match="redirected"):
+        client.fetch_rankings("not-a-real-page")
 
 
 @pytest.mark.parametrize(

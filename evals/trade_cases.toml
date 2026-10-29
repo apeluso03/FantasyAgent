@@ -1,0 +1,261 @@
+# Trade eval cases for the agent. Run with: python evals/run_trade_eval.py
+#
+# Each case is a natural-language trade question plus what a correct agent run
+# looks like. A case passes only if all three checks pass:
+#   1. tool used       -- the agent called evaluate_trade (didn't eyeball it)
+#   2. correct inputs  -- its last evaluate_trade call had the right teams, the
+#                         right players on each side (sides may be swapped),
+#                         and an accepted `horizon`
+#   3. correct verdict -- its final "VERDICT:" line matches `expected`
+#
+# `expected` is one of:  "FAIR"  |  "FAVORS <team>"  |  "INVALID"
+# "FAVORS" covers both the "Moderately" and "Heavily" buckets in trade.py.
+# "INVALID" means the trade can't be evaluated as described (e.g. a player who
+# isn't on that roster) and the agent should say so instead of inventing one.
+#
+# `horizon` (default "win_now") is the evaluate_trade horizon a correct agent
+# uses, per the system prompt: win_now unless the question asks about the long
+# term, or the team being advised is a playoff long_shot/eliminated. A list
+# means either is correct -- only allowed when the verdict is the same under
+# each (e.g. a neutral "who wins?" involving a long-shot team).
+#
+# Standings in this snapshot (7 regular-season games left, 6 playoff spots):
+# long shots are Lamarts and Krafts (1-6) and Marcus Yarns Fan Club (0-7);
+# everyone else is in position or on the bubble.
+#
+# Every expected verdict was computed by evaluate_trade against
+# eval_snapshot.db, not guessed -- `--check-cases` re-verifies them for free
+# (no model calls), and should be run after regenerating the snapshot.
+
+[snapshot]
+db = "eval_snapshot.db"                     # relative to this file
+league_id = "1312255990598483968"           # NFpeL, 2026, superflex
+owner_user_id = "1038585800163909632"       # "Joshin' Abrown'd" -- who "I"/"my team" means
+
+# --- Lopsided: the answer is obvious, so a miss is a real agent error ---
+
+[[cases]]
+id = "lopsided_star_for_scrub"
+kind = "lopsided"
+question = "Papa smurf is offering Jahmyr Gibbs to Marcus Yarns Fan Club for Roschon Johnson. Who wins that trade?"
+team_a = "Papa smurf"
+team_a_gives = ["Jahmyr Gibbs"]
+team_b = "Marcus Yarns Fan Club"
+team_b_gives = ["Roschon Johnson"]
+horizon = ["win_now", "long_term"]   # neutral question, one side is a long shot
+expected = "FAVORS Marcus Yarns Fan Club"
+
+[[cases]]
+id = "lopsided_other_pov"
+kind = "lopsided"
+question = "Run JT Run!!!! wants Brenton Strange from Like a good naber and would give up Jonathan Taylor for him. Is that smart for Run JT Run?"
+team_a = "Like a good naber"
+team_a_gives = ["Brenton Strange"]
+team_b = "Run JT Run"
+team_b_gives = ["Jonathan Taylor"]
+expected = "FAVORS Like a good naber"   # Run JT Run is 2-5 but still on the bubble: win_now
+
+# --- Fair / close calls: can it tell "fair" from "slightly uneven"? ---
+
+[[cases]]
+id = "fair_wr_swap"
+kind = "fair"
+question = "Evaluate blitzarmy trading Drake London to RB Supply Curve for Chris Olave."
+team_a = "blitzarmy"
+team_a_gives = ["Drake London"]
+team_b = "RB Supply Curve"
+team_b_gives = ["Chris Olave"]
+expected = "FAIR"
+
+[[cases]]
+id = "fair_wr_swap_2"
+kind = "fair"
+question = "Would Zay Flowers from Pookie Bears 2.0 for Malik Nabers from Run JT Run be a fair trade?"
+team_a = "Pookie Bears 2.0"
+team_a_gives = ["Zay Flowers"]
+team_b = "Run JT Run"
+team_b_gives = ["Malik Nabers"]
+expected = "FAIR"
+
+[[cases]]
+id = "fair_rb_age_gap"
+kind = "fair"
+question = "IkBall8 sends Derrick Henry to Like a good naber for Ashton Jeanty. Who comes out ahead?"
+team_a = "IkBall8"
+team_a_gives = ["Derrick Henry"]
+team_b = "Like a good naber"
+team_b_gives = ["Ashton Jeanty"]
+expected = "FAIR"   # win-now. Long-term this heavily favors IkBall8 -- see long_term_explicit
+
+[[cases]]
+id = "close_my_team_wr"
+kind = "my_team"
+question = "I'm thinking about sending Tee Higgins to tiger woods for Justin Jefferson. Good deal for me?"
+team_a = "Joshin' Abrown'd"
+team_a_gives = ["Tee Higgins"]
+team_b = "tiger woods"
+team_b_gives = ["Justin Jefferson"]
+expected = "FAIR"   # win-now; long-term it'd favor me
+
+# --- Multi-player: easier to mix up which side gives what ---
+
+[[cases]]
+id = "multi_2_for_1"
+kind = "multi"
+question = "tiger woods offers Kyren Williams and Bhayshul Tuten to Pookie Bears 2.0 for Nico Collins. Evaluate it."
+team_a = "tiger woods"
+team_a_gives = ["Kyren Williams", "Bhayshul Tuten"]
+team_b = "Pookie Bears 2.0"
+team_b_gives = ["Nico Collins"]
+expected = "FAVORS Pookie Bears 2.0"
+
+[[cases]]
+id = "multi_3_for_2"
+kind = "multi"
+question = "Lamarts and Krafts would give Bo Nix, RJ Harvey and Blake Corum to AARON JONES for Omarion Hampton and Trevor Lawrence. Fair?"
+team_a = "Lamarts and Krafts"
+team_a_gives = ["Bo Nix", "RJ Harvey", "Blake Corum"]
+team_b = "AARON JONES"
+team_b_gives = ["Omarion Hampton", "Trevor Lawrence"]
+horizon = ["win_now", "long_term"]   # Lamarts is a long shot; fair either way
+expected = "FAIR"
+
+[[cases]]
+id = "multi_my_team_2_for_1"
+kind = "my_team"
+question = "Should I trade Breece Hall and Jaylen Waddle to Like a good naber for Ja'Marr Chase?"
+team_a = "Joshin' Abrown'd"
+team_a_gives = ["Breece Hall", "Jaylen Waddle"]
+team_b = "Like a good naber"
+team_b_gives = ["Ja'Marr Chase"]
+expected = "FAIR"   # win-now; long-term it'd favor Like a good naber
+
+# --- Injuries: the IR discount is what decides these ---
+
+[[cases]]
+id = "injury_ir_achane"
+kind = "injury"
+question = "Lamarts and Krafts wants to trade De'Von Achane to blitzarmy for Kenneth Walker. Who wins?"
+team_a = "Lamarts and Krafts"
+team_a_gives = ["De'Von Achane"]
+team_b = "blitzarmy"
+team_b_gives = ["Kenneth Walker"]
+horizon = ["win_now", "long_term"]
+expected = "FAVORS Lamarts and Krafts"   # Achane is on IR (x0.5)
+
+[[cases]]
+id = "injury_ir_etienne"
+kind = "injury"
+question = "Is Papa smurf making a mistake giving Javonte Williams to Pookie Bears 2.0 for Travis Etienne?"
+team_a = "Pookie Bears 2.0"
+team_a_gives = ["Travis Etienne"]
+team_b = "Papa smurf"
+team_b_gives = ["Javonte Williams"]
+expected = "FAVORS Pookie Bears 2.0"     # Etienne is on IR (x0.5)
+
+# --- Messy input: partial names, owner usernames instead of team names ---
+
+[[cases]]
+id = "partial_player_names"
+kind = "messy_input"
+# Worded so the team " AARON JONES" can't be misread as the player Aaron Jones
+# Sr. (who is on that roster) -- an earlier "Kincaid for Fannin, RB Supply
+# Curve and AARON JONES" phrasing was genuinely ambiguous.
+question = "RB Supply Curve would trade Kincaid to the team AARON JONES, getting Fannin back. Thoughts?"
+team_a = "RB Supply Curve"
+team_a_gives = ["Dalton Kincaid"]
+team_b = "AARON JONES"
+team_b_gives = ["Harold Fannin Jr."]
+expected = "FAIR"
+
+[[cases]]
+id = "owner_usernames"
+kind = "messy_input"
+question = "scottya527 wants to send George Kittle to KGKendall for Jaylen Warren. How does that look?"
+team_a = "Like a good naber"
+team_a_gives = ["George Kittle"]
+team_b = "RB Supply Curve"
+team_b_gives = ["Jaylen Warren"]
+expected = "FAVORS Like a good naber"   # win-now; long-term (Kittle's age) it's fair
+
+# --- Invalid: the agent should report the problem, not fabricate an answer ---
+
+[[cases]]
+id = "invalid_player_not_on_roster"
+kind = "invalid"
+question = "Run JT Run trades Puka Nacua to tiger woods for Justin Jefferson. Who wins?"
+team_a = "Run JT Run"
+team_a_gives = ["Puka Nacua"]   # Puka is actually on tiger woods
+team_b = "tiger woods"
+team_b_gives = ["Justin Jefferson"]
+horizon = ["win_now", "long_term"]
+expected = "INVALID"
+
+# --- Horizon: when to judge on long-term value instead of win-now ---
+# Each of these gets a different verdict under the other horizon, so picking
+# the wrong one fails the inputs check *and* (usually) the verdict.
+
+[[cases]]
+id = "long_term_explicit"
+kind = "horizon"
+question = "Thinking purely about long-term dynasty value, is IkBall8 smart to send Derrick Henry to Like a good naber for Ashton Jeanty?"
+team_a = "IkBall8"
+team_a_gives = ["Derrick Henry"]
+team_b = "Like a good naber"
+team_b_gives = ["Ashton Jeanty"]
+horizon = "long_term"   # the user asked
+expected = "FAVORS IkBall8"   # win-now it's FAIR (fair_rb_age_gap)
+
+[[cases]]
+id = "long_shot_switches_to_long_term"
+kind = "horizon"
+question = "I run Marcus Yarns Fan Club. Should I trade Courtland Sutton to tiger woods for TreVeyon Henderson?"
+team_a = "Marcus Yarns Fan Club"
+team_a_gives = ["Courtland Sutton"]
+team_b = "tiger woods"
+team_b_gives = ["TreVeyon Henderson"]
+horizon = "long_term"   # 0-7, 4 games back with 7 left: a long shot, so sell for the future
+expected = "FAVORS Marcus Yarns Fan Club"   # win-now it'd favor tiger woods
+
+[[cases]]
+id = "long_shot_regret_question"
+kind = "horizon"
+question = "Would Lamarts and Krafts regret giving tiger woods Tucker Kraft for Travis Kelce?"
+team_a = "tiger woods"
+team_a_gives = ["Travis Kelce"]
+team_b = "Lamarts and Krafts"
+team_b_gives = ["Tucker Kraft"]
+horizon = "long_term"   # advising Lamarts (1-6, a long shot)
+expected = "FAVORS tiger woods"   # win-now it's FAIR
+
+[[cases]]
+id = "contender_stays_win_now"
+kind = "horizon"
+question = "blitzarmy here, I'm 6-1. Should I trade Brock Purdy to tiger woods for Justin Jefferson?"
+team_a = "blitzarmy"
+team_a_gives = ["Brock Purdy"]
+team_b = "tiger woods"
+team_b_gives = ["Justin Jefferson"]
+expected = "FAVORS tiger woods"   # win-now; long-term it's FAIR
+
+# --- Superflex: QB value only reads right on the derived superflex page ---
+
+[[cases]]
+id = "superflex_qb_fair"
+kind = "superflex"
+question = "blitzarmy trades Patrick Mahomes to Pookie Bears 2.0 for Zay Flowers. Who wins?"
+team_a = "blitzarmy"
+team_a_gives = ["Patrick Mahomes"]
+team_b = "Pookie Bears 2.0"
+team_b_gives = ["Zay Flowers"]
+expected = "FAIR"   # 1-QB rest-of-season values would call it heavily in blitzarmy's favor
+
+[[cases]]
+id = "superflex_qb_flips_winner"
+kind = "superflex"
+question = "Like a good naber is sending Dak Prescott to Run JT Run for Garrett Wilson. Who gets the better end?"
+team_a = "Like a good naber"
+team_a_gives = ["Dak Prescott"]
+team_b = "Run JT Run"
+team_b_gives = ["Garrett Wilson"]
+expected = "FAVORS Run JT Run"   # 1-QB rest-of-season values pick the *other* side

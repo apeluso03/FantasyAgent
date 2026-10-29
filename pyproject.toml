@@ -11,7 +11,8 @@ dependencies = [
     "typer>=0.12",
     "python-dotenv>=1.0",
     "openai>=1.50",
-    "pillow>=10.0",
+    # Pinned below 2.0: the 2.x SDK changed the server API mcp_server.py uses.
+    "mcp>=1.2,<2",
 ]
 
 [project.optional-dependencies]
@@ -19,15 +20,16 @@ dev = [
     "pytest>=8.0",
     "pytest-mock>=3.14",
 ]
-build = [
-    "pyinstaller>=6.10",
-    "pyinstaller-hooks-contrib>=2024.9",
+web = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "psycopg[binary]>=3.2",
+    "bcrypt>=4.0",
 ]
 
 [project.scripts]
 fantasy-agent = "fantasy_agent.cli:app"
-fantasy-agent-gui = "fantasy_agent.gui:main"
-fantasy-agent-gui-user = "fantasy_agent.gui_user:main"
+fantasy-agent-mcp = "fantasy_agent.mcp_server:main"
 
 [build-system]
 requires = ["setuptools>=68"]

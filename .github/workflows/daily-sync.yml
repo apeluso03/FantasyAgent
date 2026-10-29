@@ -1,0 +1,42 @@
+# Stretch goal from CLAUDE.md section 7.3: refresh the deployed backend's
+# cache daily instead of relying on someone opening Settings and clicking
+# "Sync league" by hand.
+#
+# Required repo secrets (Settings -> Secrets and variables -> Actions):
+#   FANTASY_AGENT_API_URL     e.g. https://fantasy-agent-api.onrender.com
+#   FANTASY_AGENT_AUTH_TOKEN  a session token for a signed-in account (log in
+#                             once via the app, copy the token out of
+#                             localStorage's fantasy-agent-auth-token key).
+#                             Sessions expire after 30 days (backend/app/auth.py
+#                             SESSION_TTL) -- this secret needs refreshing on
+#                             about that cadence, there's no long-lived
+#                             service-account token in this app.
+#   FANTASY_AGENT_ACCESS_CODE optional -- only needed if DEMO_ACCESS_CODE is
+#                             set on the backend (CLAUDE.md section 5.7).
+name: Daily league sync
+
+on:
+  schedule:
+    - cron: "0 13 * * *" # ~6am Pacific / 9am Eastern
+  workflow_dispatch: {} # allow manual runs from the Actions tab too
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger league + rankings sync
+        run: |
+          set -euo pipefail
+          auth_header="Authorization: Bearer ${{ secrets.FANTASY_AGENT_AUTH_TOKEN }}"
+          access_header=()
+          if [ -n "${{ secrets.FANTASY_AGENT_ACCESS_CODE }}" ]; then
+            access_header=(-H "X-Access-Code: ${{ secrets.FANTASY_AGENT_ACCESS_CODE }}")
+          fi
+
+          curl -sf -X POST "${{ secrets.FANTASY_AGENT_API_URL }}/api/sync" \
+            -H "$auth_header" -H "Content-Type: application/json" \
+            "${access_header[@]}" -d '{"force_players": false}'
+          echo
+          curl -sf -X POST "${{ secrets.FANTASY_AGENT_API_URL }}/api/rankings/sync" \
+            -H "$auth_header" -H "Content-Type: application/json" \
+            "${access_header[@]}" -d '{"force": false}'

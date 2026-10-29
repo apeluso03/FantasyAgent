@@ -6,43 +6,123 @@ player available right now" by pulling live league/player data and reasoning ove
 GPT-5.6 Luna's tool-calling (OpenAI's Responses API) — not a static value chart, and not a
 chatbot wrapper.
 
-See [fantasy-agent-spec.md](fantasy-agent-spec.md) for the original project spec.
+Originally a CLI + two Tkinter desktop GUIs; now a React + TypeScript web app over a FastAPI
+backend, with the original CLI and domain logic unchanged underneath. See
+[fantasy-agent-spec.md](fantasy-agent-spec.md) for the original project spec and
+[CLAUDE.md](CLAUDE.md) for the web migration spec both halves were built from.
+
+## Screenshots
+
+| | |
+|---|---|
+| ![Landing page](docs/screenshots/landing.png) | ![Chat](docs/screenshots/chat.png) |
+| ![My Roster](docs/screenshots/my-roster.png) | ![Power Rankings](docs/screenshots/power-rankings.png) |
+| ![Trade Analyzer](docs/screenshots/trade-analyzer.png) | ![Mobile](docs/screenshots/mobile.png) |
+
+**Live demo:** not deployed yet — everything needed to deploy (Dockerfile, Postgres compatibility,
+hosting config) is built and verified locally; see [CLAUDE.md section 7.3](CLAUDE.md#73-hosting)
+for the remaining checklist (it needs real accounts on a hosting provider, which only you can set up).
 
 ## Status
 
-MVP complete, following the spec's build order:
+Complete, following the web migration spec's build order ([CLAUDE.md](CLAUDE.md) section 8):
 
 1. Sleeper API integration + local cache (league, rosters, users, players, draft history)
 2. FantasyPros rankings scraper + player-ID matching
 3. Keeper decision logic + trade analyzer (validated as pure data pipelines, no LLM)
 4. GPT-5.6 Luna tool-calling agent wired to the above
 5. Draft-day best-available assistant (live-polled, superflex-aware)
-6. Two desktop GUI editions — a dev build and a polished user edition (see below)
+6. FastAPI backend wrapping all of the above as a JSON API, with real account auth
+7. React + TypeScript frontend (all 7 pages, mobile-responsive, light/dark mode)
+8. Deploy-readiness: Dockerfile, docker-compose, verified Postgres compatibility
+9. Cleanup: the two Tkinter desktop GUIs retired (full history still in `git log`)
+
+## Architecture
+
+```
+  Browser (React + TypeScript, Vite)
+        |
+        |  HTTPS, JSON (/api/*) -- every route but /api/health and /api/auth/*
+        |  requires a signed-in account
+        v
+  FastAPI app (backend/app)
+   - routers: auth, league, roster, rankings, keepers, trade, draft, players, sync, agent
+   - Pydantic response models; bcrypt + revocable session tokens for accounts
+        |
+        |  plain Python function calls -- backend never rewrites domain logic
+        v
+  fantasy_agent package (unchanged domain layer, also the CLI's entrypoint)
+   - keeper.py, trade.py, draft.py, power_rankings.py, my_roster.py (pure, no LLM)
+   - agent/core.py + agent/tools.py (GPT-5.6 Luna tool-calling loop)
+   - sync.py, rankings/ (FantasyPros), sleeper/ (API client)
+        |
+        v
+  SQLite (local dev)  /  PostgreSQL (deployment)
+```
+
+The CLI (`fantasy-agent ...`) and the web API are two front doors onto the same domain layer —
+neither the pipelines, the agent loop, nor the Sleeper/FantasyPros clients changed to support the
+web migration. See "Why a manual tool-calling loop" and the rest of this README for the parts
+that are genuinely unchanged since the original CLI-only build.
 
 ## Setup
+
+Needs both halves running for the web app; the CLI only needs the first.
+
+### Backend
 
 ```bash
 python -m venv .venv
 ./.venv/Scripts/activate        # macOS/Linux: source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -e ".[web,dev]"
 cp .env.example .env            # defaults already point at the real league
 ```
 
-`OPENAI_API_KEY` in `.env` is only required for `fantasy-agent ask`. Every other command
-works against the local cache with no API key.
+`OPENAI_API_KEY` in `.env` is only required for the agent (`fantasy-agent ask` / the Chat page).
+Everything else works against the local cache with no API key.
+
+```bash
+uvicorn backend.app.main:app --reload    # http://localhost:8000, docs at /docs
+```
+
+### Frontend
+
+```bash
+cd frontend
+npm install
+npm run dev    # http://localhost:5173, proxies /api to localhost:8000
+```
+
+First visit shows a sign-in/create-account screen — every page past that requires a signed-in
+account (enforced by the backend, not just hidden in the UI). Create one, then from **Settings**
+click **Sync league** and **Sync rankings** to populate real data.
+
+### Full stack against Postgres (optional)
+
+```bash
+docker compose up    # backend + a real Postgres container
+```
+
+Still run the frontend separately via `npm run dev` — Vite's dev server + HMR beats a built
+static container for day-to-day work. This is for exercising the backend against the same
+database engine a deployment would use; see `docker-compose.yml`'s comments.
 
 ## Usage
+
+### CLI
 
 ```bash
 # --- Data layer: pull everything into the local cache ---
 fantasy-agent sync                          # league, rosters, users, players, draft history
+fantasy-agent refresh                       # just players + rankings, each respecting its own TTL
+                                             # -- safe to run on a schedule (e.g. Task Scheduler)
 fantasy-agent league                        # cached league settings
 fantasy-agent rosters                       # power-rank every team 1-N, with QB/RB/WR/TE breakdown
-fantasy-agent rosters --detail              # + each team's best starting lineup
+fantasy-agent rosters --detail              # + each team's best starting lineup, with injury tags
 fantasy-agent players --search "mahomes"    # sanity-check the player cache
 
 # --- Rankings: scrape FantasyPros, match to Sleeper player IDs ---
-fantasy-agent rankings-sync                 # scrape + match (rate-limited, cached ~20h)
+fantasy-agent rankings-sync                 # scrape + match every weekly/ROS/dynasty page (cached ~6h each)
 fantasy-agent rankings-show --search "mahomes"
 fantasy-agent rankings-unmatched            # players the matcher couldn't resolve
 fantasy-agent rankings-alias <fp_id> <sleeper_id>   # manual override for a bad/no match
@@ -50,7 +130,7 @@ fantasy-agent rankings-alias <fp_id> <sleeper_id>   # manual override for a bad/
 # --- Pure data-pipeline tools (no LLM) ---
 fantasy-agent keepers                       # rank your roster's keeper candidates
 fantasy-agent trade --side-a-owner <id> --side-a-gives p1,p2 \
-                     --side-b-owner <id> --side-b-gives p3
+                     --side-b-owner <id> --side-b-gives p3   # injury-adjusted value on both sides
 fantasy-agent best-available                # live draft board (polls Sleeper fresh every call)
 
 # --- The agent itself ---
@@ -60,118 +140,91 @@ fantasy-agent ask "should I keep Bijan Robinson or draft fresh?"
 `players/nfl` is a multi-MB dump Sleeper asks callers not to poll frequently, so it's only
 re-pulled when the cache is older than `PLAYERS_CACHE_TTL_HOURS` (default 24h; `sync
 --force-players` bypasses that during draft week). FantasyPros rankings are cached the same
-way, on `RANKINGS_CACHE_TTL_HOURS`. The agent never scrapes or hits Sleeper live mid-conversation
-— with one deliberate exception: `best-available` polls the draft endpoint fresh on every call,
-because "who's been picked" can't be allowed to go stale during a live draft.
+way, on `RANKINGS_CACHE_TTL_HOURS` (default 6h — can be lowered further in-season if needed). The
+agent never scrapes or hits Sleeper live mid-conversation — with one deliberate exception:
+`best-available` polls the draft endpoint fresh on every call, because "who's been picked" can't
+be allowed to go stale during a live draft. `rosters` and `trade` both print a "Values as of" line
+so it's always clear how fresh the numbers behind them are; `refresh` is the lightweight command to
+actually keep that fresh without re-pulling league/roster data every time (see "Data sources and
+caching" below).
 
-## Desktop GUIs — two editions
+### Web app
 
-There are two Tkinter front ends over the same `fantasy_agent` package, aimed at two different
-audiences. **Any GUI-relevant change should land in both** — see "Shared GUI code" below for how
-that's kept sane.
+Seven pages: **Chat** (the agent, with a "Show reasoning" toggle over the tool-call trace), **My
+Roster**, **Power Rankings**, **Keepers**, **Trade Analyzer** (pick two teams — each side's actual
+roster loads automatically as the player picker, so you can only pick players that team really
+owns), **Draft Board** (a "Live" toggle polls every 15s), and **Settings** (account, league
+override for testing against a different Sleeper league without restarting the backend, sync
+status/triggers, demo access code). Sidebar nav on desktop, bottom tab bar on mobile; full
+light/dark mode.
 
-| | Dev build (`gui.py`) | User edition (`gui_user.py`) |
-|---|---|---|
-| Audience | You, developing/debugging | Anyone — a friend, a different league, a different person entirely |
-| Config | `.env` in the repo (checked-out, one league) | A setup wizard on first launch, saved to `%APPDATA%\FantasyAgent\config.json` (any league, any machine) |
-| Chat view | Raw output pane — every tool call and its result, logged | Clean chat bubbles, no visible tool-call trace — just the answer |
-| Tabs | Console (quick actions + `ask` + raw output), My Roster, Power Rankings, Best Available | Chat, My Roster, Power Rankings, Best Available |
-| Accent color | Terracotta (`ACCENT`, `#D97757`) | Celadon / Hunter Green (`#A1CCA5` / `#415D43`) |
-| Platforms | Sleeper only | Sleeper (live); ESPN and Yahoo shown as "coming soon" — see below |
-
-### Dev build
-
-```bash
-./run_gui.bat          # double-click, or run from a shell -- launches with the venv's pythonw
-```
-
-### User edition
+## Tests
 
 ```bash
-./run_gui_user.bat
+pytest                              # domain layer + CLI (100 tests)
+pytest backend/tests                # FastAPI routes (51 tests)
+cd frontend && npm test             # React components (9 tests)
 ```
 
-First launch shows a setup screen: pick a platform (Sleeper today), enter a league ID and your
-Sleeper username, paste an OpenAI API key. It resolves your username to a Sleeper user ID, syncs
-the league, and saves everything to `%APPDATA%\FantasyAgent\config.json` — nothing is read from
-`.env`. This means the dev build (pointed at your league via `.env`) and the user edition (pointed
-at anyone's league) can run side by side on the same machine without clobbering each other's cache
-or settings; each gets its own SQLite database under its own config root. A gear icon in the
-header reopens the setup screen, prefilled, to change league/key later.
+All offline — Sleeper and FantasyPros HTTP calls are mocked with `httpx.MockTransport`, the OpenAI
+client is mocked in `test_agent_core.py` (fake Responses API `output`/`function_call` objects),
+and the backend tests run against an in-memory SQLite database with a throwaway auto-authenticated
+test account — the suite needs no network access, API key, or live league. Keeper/trade/draft
+logic, the full backend API, and Postgres compatibility are additionally validated against the
+real league's live data during development (see commit history / session notes) — sane,
+explainable output on real rosters is the actual bar per the spec, not just green tests.
 
-**ESPN and Yahoo are scaffolded, not implemented.** The platform picker, `UserConfig.platform`,
-and `user_config.ALL_PLATFORMS` all model three platforms; `user_config.IMPLEMENTED_PLATFORMS`
-is just `("sleeper",)` today, and the ESPN/Yahoo radio buttons are disabled with a "coming soon"
-label. They weren't stubbed further than that because both need real, untestable auth flows —
-ESPN via session cookies pulled from a logged-in browser, Yahoo via a registered OAuth2 app — and
-faking that integration without real credentials to validate against isn't something worth doing.
-Adding a real platform later means: an API client under `<platform>/` mirroring `sleeper/client.py`,
-a `sync_all()` branch, and flipping it into `IMPLEMENTED_PLATFORMS`.
-
-### Shared GUI code
-
-- `gui_theme.py` — one palette, one `ttk.Style` builder. `build_style()` is the dev build's
-  terracotta look; `build_style_user()` calls it and recolors the same style *names*
-  (`Accent.TButton`, `Tab.TButton`/`TabActive.TButton`, `Minimal.Vertical.TScrollbar`) to Celadon/
-  Hunter Green — layouts and fonts are defined once, only colors differ between editions.
-- `gui_screens.py` — the three read-only data tabs (`RosterScreen`, `PowerRankingsScreen`,
-  `BestAvailableScreen`), each taking an `accent` color so both editions render the exact same
-  widgets. `RosterScreen` fetches each player's headshot via `player_images.py` (cached to disk
-  after first fetch — see below) and draws it as a circular thumbnail with Pillow; players with no
-  photo (kickers, DEF, some rookies) get a circular initial-letter placeholder instead.
-- `my_roster.py` / `power_rankings.py` / `draft.py` — the pure data pipelines both GUIs' tabs read
-  from; no GUI code lives in these.
-
-### Standalone .exe (no Python/venv required to run)
-
-```bash
-pip install -e ".[build]"     # PyInstaller + hook contrib, one-time
-
-./build_exe.bat                                          # dev build -> dist/FantasyAgent/
-.venv\Scripts\pyinstaller.exe FantasyAgentUser.spec       # user edition -> dist/FantasyAgentUser/
-```
-
-Each produces its own `dist/<Name>/<Name>.exe` plus a supporting `_internal/` folder — keep them
-together (folder-based builds, not single portable files; see below for why). Copy your `.env`
-into `dist/FantasyAgent/` alongside the dev build's exe before running it. The user edition needs
-no `.env` at all — its setup wizard runs on first launch exactly like the dev-mode version does.
-
-**Why `--onedir`, not `--onefile`.** The dev build runs every command (`sync`, `ask`, ...) by
-launching itself again as a subprocess with CLI arguments — `launcher.py` dispatches on
-`sys.argv` to decide whether a given launch is "open the GUI" or "run the CLI." A `--onefile`
-build re-extracts its entire bundle to a temp directory on *every* launch, which would make every
-single button click pay that extraction cost. `--onedir` runs directly from disk with no such
-penalty. (The user edition's `launcher_user.py` never shells out to a subprocess — it calls
-`run_agent()` and the sync/data functions in-process — but it's built the same way for consistency
-and so both exes behave identically operationally.)
-
-## Architecture
+## Project layout
 
 ```
-                    You (CLI: ask "...")
-                             |
-                    Agent core (agent/core.py)
-                    GPT-5.6 Luna + a manual tool-calling loop
-                 -----------------------------------
-                 |           |            |         |
-          Sleeper cache  Rankings    Keeper/Trade  Live draft
-           (sync.py)      cache       pipelines    board (draft.py,
-                                    (keeper.py,      polls Sleeper
-                                     trade.py)        directly)
-                 |           |            |
-                 -----------------------------------
-                             |
-                    SQLite (data/fantasy_agent.db)
+src/fantasy_agent/      # unchanged domain layer -- also the CLI's entrypoint
+  config.py             # env-based settings
+  sleeper/               # Sleeper API client + response schemas
+  rankings/              # FantasyPros scraper, player-ID matching, response schemas
+  db/                    # SQLAlchemy models + session (SQLite/Postgres; lazily initialized)
+  sync.py                # pulls Sleeper + FantasyPros data into the local cache
+  roster_analysis.py     # shared position-count/need helpers
+  my_roster.py           # full single-team roster view (starters/bench/IR/taxi)
+  keeper.py              # keeper decision logic (pure, no LLM)
+  trade.py               # trade analyzer (pure, no LLM)
+  draft.py               # live best-available draft assistant (pure, no LLM)
+  power_rankings.py      # league-wide power rankings + positional breakdown (pure, no LLM)
+  player_analysis.py     # last-N-games PPR trend for the player detail panel
+  agent/
+    tools.py             # tool schemas + handlers exposed to the model
+    core.py              # the manual tool-calling loop + run_agent_with_trace()
+  cli.py                 # `fantasy-agent` entrypoint
+backend/
+  app/
+    main.py, deps.py, schemas.py, auth.py, jobs.py
+    routers/             # auth, league, roster, rankings, keepers, trade, draft, players, sync, agent
+  tests/                 # FastAPI route tests, in-memory SQLite, auto-authenticated client
+  Dockerfile
+frontend/
+  src/
+    api/                 # typed fetch client + types
+    hooks/                # one hook per endpoint (TanStack Query)
+    state/                # AuthContext, LeagueContext, PlayerPanelContext
+    components/, pages/
+tests/                   # domain-layer + CLI tests
+docs/screenshots/        # this README's screenshots
+CLAUDE.md                # web migration spec (phases, design decisions, open questions)
+fantasy-agent-spec.md    # original CLI/agent MVP spec
+docker-compose.yml        # backend + Postgres for local full-stack runs
+.github/workflows/        # daily-sync.yml -- scheduled POST /api/sync once deployed
 ```
+
+## Architecture notes (unchanged from the original CLI build)
 
 The agent doesn't do one API call and hand it to the model — `agent/core.py` runs an explicit
 loop against OpenAI's Responses API (`client.responses.create`), feeding each round's output back
-in as input until the model stops requesting tools (see "Why a manual loop" below). The model
-decides which of the 9 tools in `agent/tools.py` it needs for a given question, the handler runs
-against the local cache (or, for `get_best_available`, a live Sleeper call), and the result goes
-back as a `function_call_output` for the model to reason over — possibly triggering more tool
-calls — before it answers. Every tool call and result is logged (`INFO fantasy_agent.agent.core`),
-which is both a debugging aid and the "here's how it thinks" trace worth showing in an interview.
+in as input until the model stops requesting tools. The model decides which of the 9 tools in
+`agent/tools.py` it needs for a given question, the handler runs against the local cache (or, for
+`get_best_available`, a live Sleeper call), and the result goes back as a `function_call_output`
+for the model to reason over — possibly triggering more tool calls — before it answers. Every tool
+call and result is logged (`INFO fantasy_agent.agent.core`) and, via the web API's
+`run_agent_with_trace()`, surfaced in the Chat page's "Show reasoning" toggle — both a debugging
+aid and the "here's how it thinks" trace worth showing in an interview.
 
 ### Why a manual tool-calling loop
 
@@ -182,12 +235,13 @@ inside SDK internals.
 
 ### Why keeper/trade/draft logic is *not* LLM calls
 
-Per the build order, `keeper.py`, `trade.py`, and `draft.py` are plain Python functions —
-deterministic, unit-tested, and validated against the real league *before* any LLM was wired in.
-The model's job is to decide *when* to call them and to explain the result in context, not to
-recompute a keeper cost or trade value itself (which an LLM would do inconsistently and
-unverifiably). This split — deterministic pipeline underneath, LLM for tool selection and
-explanation on top — is the core design decision of the project.
+`keeper.py`, `trade.py`, and `draft.py` are plain Python functions — deterministic, unit-tested,
+and validated against the real league *before* any LLM was wired in. The model's job is to decide
+*when* to call them and to explain the result in context, not to recompute a keeper cost or trade
+value itself (which an LLM would do inconsistently and unverifiably). This split — deterministic
+pipeline underneath, LLM for tool selection and explanation on top — is the core design decision
+of the project, and it's also why the web migration (Phases 1-5) never touched these files: the
+backend just calls the same functions the CLI already did.
 
 ### Note on provider
 
@@ -205,17 +259,50 @@ automatically, so there's no client-side cache bookkeeping to do here.
 
 | Source | What | Cache policy |
 |---|---|---|
-| Sleeper API | league, rosters, users, full player DB, draft history | `sync`; players/nfl gated by TTL (large, rate-sensitive) |
+| Sleeper API | league, rosters, users, full player DB (incl. injury status), draft history | `sync`; players/nfl gated by TTL (large, rate-sensitive) |
 | Sleeper API | current draft's live picks | **never cached** — polled fresh every `best-available` call |
-| FantasyPros | dynasty/superflex consensus rankings | `rankings-sync`; TTL-gated, scraped politely (see below) |
+| FantasyPros | consensus rankings: weekly, rest-of-season, and dynasty, for superflex and 1-QB | `rankings-sync`; TTL-gated per page, scraped politely (see below) |
+
+`PLAYERS_CACHE_TTL_HOURS` defaults to 24h, matching Sleeper's ask to pull the full player dump
+sparingly. `RANKINGS_CACHE_TTL_HOURS` defaults to 6h — low enough that trade/keeper/power-rankings
+values don't lag a whole news cycle, without re-scraping FantasyPros on every page load. Both can
+be lowered further in-season (e.g. around a Tuesday/Wednesday injury-report day) if 6h still feels
+stale; FantasyPros is scraped politely regardless (four pages per full `rankings-sync` run, 5s
+apart per `robots.txt`'s crawl-delay), this setting only controls how often `fantasy-agent refresh` is
+willing to re-scrape.
+
+**Which rankings answer which question** (`rankings/pages.py`). Each question has a time horizon,
+and the agent's tools pick the matching page for the league's format on their own:
+
+| Horizon | Used for | Superflex page | 1-QB page |
+|---|---|---|---|
+| `ros` (rest of season) | the default: trades ("win now"), rosters, power rankings | `ros-ppr-superflex-derived` | `ros-ppr-overall` |
+| `weekly` | this week's start/sit | `ppr-superflex` | `ppr-superflex` |
+| `dynasty` | keepers, explicit long-term questions, teams out of the playoff race | `dynasty-superflex` | `dynasty-overall` |
+
+FantasyPros doesn't publish rest-of-season *superflex* rankings, so that page is derived during
+sync: the 1-QB rest-of-season order is kept within QBs and within skill players, and QBs are
+re-slotted among skill players using the weekly superflex page's spacing ("the 3rd QB goes after
+the 4th skill player"). Trades default to win-now; the agent switches to dynasty value when asked,
+or when the team it's advising is a playoff long shot (`standings.py` -- games back of the last
+playoff seed vs. games left).
+
+**Keeping values fresh.** `fantasy-agent refresh` runs the player sync and the rankings sync
+together, each still respecting its own TTL (so running it hourly, say from Windows Task
+Scheduler, is harmless — most runs will just report both as still fresh). It's the same thing a
+schedule should call instead of the heavier `fantasy-agent sync` (which also re-pulls
+league/roster/user data and draft history every time). Both the `rosters` and `trade` CLI commands
+print a "Values as of" line from the cache's actual sync timestamps, so it's never ambiguous how
+stale a given trade verdict or power ranking is.
 
 **FantasyPros scraping approach.** The spec called for Playwright, matching prior scraping
 experience — but FantasyPros' rankings pages embed the full ranked-player list as a JSON blob
 directly in a `<script>` tag (`var ecrData = {...}`), so a plain `httpx` GET plus a
 balanced-brace JSON extraction (`rankings/fantasypros.py`) gets the same data without a headless
 browser. `robots.txt` disallows the interactive `/nfl/ranker/` tool but not `/nfl/rankings/`
-pages, and asks for a 5s crawl-delay; the scraper pulls one page per `rankings-sync` run and is
-always read from cache during agent conversations, never scraped on demand.
+pages, and asks for a 5s crawl-delay; the scraper pulls a handful of pages per `rankings-sync` run,
+refuses a response that was redirected to a different page (FantasyPros silently sends unknown
+slugs to its redraft cheat sheet), and is always read from cache during agent conversations, never scraped on demand.
 
 **Player-ID matching** (`rankings/matching.py`) is the fiddly part the spec calls out. FantasyPros
 and Sleeper name players differently (suffixes, punctuation, nicknames) and represent defenses
@@ -236,9 +323,22 @@ is a simple opportunity-cost comparison against the replacement-level player you
 draft slot — explainable, not a precise valuation model.
 
 **Trade value model** (`trade.py`). Each player's rank is converted to a comparable value via a
-monotonic exponential decay curve, similar in spirit to public dynasty trade charts. Roster-need
-impact (does the trade fill a hole or add to a surplus) is computed from before/after position
-counts against the league's starter requirements.
+monotonic exponential decay curve (`player_value`), similar in spirit to public dynasty trade
+charts. Roster-need impact (does the trade fill a hole or add to a surplus) is computed from
+before/after position counts against the league's starter requirements.
+
+`adjusted_player_value()` layers a modest injury discount on top of that same curve — a flat
+multiplier per Sleeper `injury_status` (Questionable 0.95, Doubtful 0.85, Out 0.75, IR/PUP/Sus
+0.5; tunable in `config.py`'s `injury_value_multipliers`), not a separate risk model. This is a
+keeper league and FantasyPros' own rankings already partly price injuries in, so the point is a
+small, explainable nudge, not a competing valuation system. A status with no configured
+multiplier (Sleeper's data has a few beyond the common ones, e.g. `NA`) falls back to 1.0 and logs
+a warning rather than guessing. `trade.evaluate_trade()` uses the adjusted value for both sides'
+`value_given`/`value_received`, and each `TradeSideResult` carries structured
+`injured_players_given`/`injured_players_received` lists (name, status, multiplier, a short
+reason like `"Out (Hamstring): value x0.75"`) alongside a short injury note folded into
+`reasoning` — so a trade verdict shows exactly which players were discounted and why, not just the
+adjusted numbers.
 
 **Superflex-awareness in the draft assistant** (`draft.py`) comes from the data source, not extra
 logic: rankings are scraped from FantasyPros' *superflex* consensus page, so QBs are already
@@ -255,60 +355,30 @@ explain (and it's what correctly stacks a second elite QB into SUPER_FLEX over a
 option). Alongside the overall rank, each team also gets a QB/RB/WR/TE positional rank computed
 from *whole-roster* value at that position — this is what actually answers "where is this team
 strong or thin," since a team can have a great starting lineup while sitting on zero bench depth
-at a position, or vice versa. Both use the same `trade.player_value` curve as the trade analyzer,
-so power rankings and trade values stay on one consistent scale.
+at a position, or vice versa. Both use the same injury-adjusted `trade.adjusted_player_value` curve
+as the trade analyzer, so power rankings and trade values stay on one consistent scale.
 
-## Tests
+Injury status feeds the starting-lineup fill directly: a player whose status is Out, IR, PUP, or
+Sus (`Settings.unavailable_injury_statuses`) can't occupy a starting slot at all — the greedy fill
+skips straight to the next-best available option, same as if that slot were empty for them.
+Questionable and Doubtful players can still start, just at their (already slightly lower) adjusted
+value. The whole-roster *positional* value is unaffected by any of this — it includes every
+rostered player regardless of availability, since an injured star still has trade/keeper value,
+they just aren't filling a lineup slot this week. Each `StarterSlot` carries its player's
+`injury_status`, and each `TeamPowerRanking` carries an `injured_players` list (anyone on the
+roster with a non-empty status, not just the unavailable ones) for a quick "who's banged up" view
+per team.
 
-```bash
-pytest
-```
+### Accounts (new in the web migration)
 
-All tests are offline — Sleeper and FantasyPros HTTP calls are mocked with
-`httpx.MockTransport`, and the OpenAI client is mocked in `test_agent_core.py` (fake Responses
-API `output`/`function_call` objects), so the suite needs no network access, API key, or live league.
-Keeper/trade/draft logic is additionally validated against the real league's live data during
-development (see commit history / session notes) — sane, explainable output on real rosters is
-the actual bar per the spec, not just green tests.
-
-## Project layout
-
-```
-src/fantasy_agent/
-  config.py           # env-based settings (dev build); loosened defaults so the user
-                       #   edition can override everything at runtime via user_config.py
-  user_config.py       # user edition's per-user config: %APPDATA%\FantasyAgent, platform enum
-  sleeper/             # Sleeper API client + response schemas
-  rankings/            # FantasyPros scraper, player-ID matching, response schemas
-  db/                  # SQLAlchemy models + session (SQLite cache; lazily initialized so the
-                       #   user edition can point it at a per-user DB path before first use)
-  sync.py              # pulls Sleeper + FantasyPros data into the local cache
-  roster_analysis.py    # shared position-count/need helpers (trade.py + draft.py + power_rankings.py)
-  my_roster.py          # full single-team roster view (starters/bench/IR/taxi) -- My Roster tab
-  player_images.py      # Sleeper headshot fetch + on-disk cache, used by gui_screens.RosterScreen
-  keeper.py            # keeper decision logic (pure, no LLM)
-  trade.py             # trade analyzer (pure, no LLM)
-  draft.py             # live best-available draft assistant (pure, no LLM)
-  power_rankings.py    # league-wide power rankings + positional breakdown (pure, no LLM)
-  agent/
-    tools.py           # tool schemas + handlers exposed to the model
-    core.py            # the manual tool-calling loop
-  cli.py                # `fantasy-agent` entrypoint
-  gui_theme.py          # shared palette + ttk.Style builder for both GUI editions
-  gui_screens.py        # shared My Roster / Power Rankings / Best Available tab widgets
-  gui.py                # dev-build Tkinter GUI (Console + shared data tabs)
-  gui_user.py           # user-edition Tkinter GUI (setup wizard + Chat + shared data tabs)
-tests/
-assets/
-  icon.ico              # app icon (scripts/make_icon.py regenerates it)
-launcher.py              # PyInstaller entry point for the dev build (dispatches to CLI or GUI)
-launcher_user.py         # PyInstaller entry point for the user edition (GUI only)
-FantasyAgent.spec        # PyInstaller build config -- dev build
-FantasyAgentUser.spec    # PyInstaller build config -- user edition
-run_gui.bat               # double-click launcher, dev build (dev mode, uses the venv)
-run_gui_user.bat          # double-click launcher, user edition (dev mode, uses the venv)
-build_exe.bat             # builds the standalone dev-build .exe
-```
+Every route but `/api/health` and `/api/auth/*` requires a signed-in account — enforced by a
+FastAPI dependency server-side, not just a frontend screen. Passwords are bcrypt-hashed; sessions
+are opaque, revocable bearer tokens (not JWTs) with a 30-day TTL, specifically so logout actually
+invalidates one server-side. See [CLAUDE.md section 5.10](CLAUDE.md#510-accounts) for the full
+design, including the deliberate gaps (no email verification, password reset, or login rate
+limiting — fine for a personal/portfolio deployment, real gaps for anything wider) and the 401-vs-
+403 split that lets the account gate and the separate demo-access-code gate (on the agent/sync
+routes specifically, since those cost real money per call) coexist without one tripping the other.
 
 ## Success criteria (from the spec)
 

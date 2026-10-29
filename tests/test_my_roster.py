@@ -7,7 +7,7 @@ from fantasy_agent.my_roster import get_my_roster
 
 LEAGUE_ID = "league1"
 OWNER_A = "ownerA"
-PAGE = "dynasty-superflex-overall"
+PAGE = "dynasty-superflex"
 ROSTER_POSITIONS = ["QB", "RB", "WR", "FLEX", "BN", "BN", "IR"]
 
 

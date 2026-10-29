@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import time
 from dataclasses import dataclass, field
 
 from sqlalchemy.orm import Session
@@ -27,12 +28,13 @@ from .db.models import (
 from .db.session import get_session, init_db
 from .rankings.fantasypros import FantasyProsClient
 from .rankings.matching import SleeperPlayerIndex, match_player
+from .rankings.pages import DERIVED_ROS_SUPERFLEX, ROS_1QB, SOURCE_PAGES, WEEKLY_SUPERFLEX, derive_superflex_order
 from .sleeper.client import SleeperClient
 
 logger = logging.getLogger(__name__)
 
 
-def _get_last_synced(session: Session, resource: str) -> dt.datetime | None:
+def get_last_synced(session: Session, resource: str) -> dt.datetime | None:
     meta = session.get(SyncMeta, resource)
     if meta is None:
         return None
@@ -108,7 +110,7 @@ def sync_rosters(session: Session, client: SleeperClient, league_id: str) -> lis
 
 def sync_players(session: Session, client: SleeperClient, *, force: bool = False) -> int:
     """Pull the full player database, but only if the cache is stale (or forced)."""
-    last_synced = _get_last_synced(session, "players")
+    last_synced = get_last_synced(session, "players")
     ttl = dt.timedelta(hours=settings.players_cache_ttl_hours)
     if not force and last_synced is not None:
         age = dt.datetime.now(dt.timezone.utc) - last_synced
@@ -130,6 +132,10 @@ def sync_players(session: Session, client: SleeperClient, *, force: bool = False
         record.fantasy_positions = player.fantasy_positions
         record.status = player.status
         record.active = player.active
+        record.injury_status = player.injury_status
+        record.injury_body_part = player.injury_body_part
+        record.injury_notes = player.injury_notes
+        record.injury_start_date = player.injury_start_date
         count += 1
     _touch_sync_meta(session, "players")
     logger.info("Synced %d players", count)
@@ -215,7 +221,7 @@ def sync_rankings(
     """
     page = page or settings.fantasypros_ranking_page
     resource = f"rankings:{page}"
-    last_synced = _get_last_synced(session, resource)
+    last_synced = get_last_synced(session, resource)
     ttl = dt.timedelta(hours=settings.rankings_cache_ttl_hours)
     if not force and last_synced is not None:
         age = dt.datetime.now(dt.timezone.utc) - last_synced
@@ -269,9 +275,134 @@ def sync_rankings(
     )
 
 
-def sync_rankings_all(
-    page: str | None = None, *, force: bool = False
-) -> RankingsSyncResult | None:
+def derive_ros_superflex(session: Session) -> RankingsSyncResult | None:
+    """Build the rest-of-season superflex page FantasyPros doesn't publish: the
+    1-QB rest-of-season ranking, with QBs re-slotted using the weekly superflex
+    page's QB-vs-skill-player spacing (see pages.derive_superflex_order).
+    No network -- works purely off the two already-synced source pages."""
+    base = (
+        session.query(RankingRecord)
+        .filter_by(source="fantasypros", page=ROS_1QB)
+        .order_by(RankingRecord.rank_ecr)
+        .all()
+    )
+    reference = (
+        session.query(RankingRecord.position)
+        .filter_by(source="fantasypros", page=WEEKLY_SUPERFLEX)
+        .order_by(RankingRecord.rank_ecr)
+        .all()
+    )
+    if not base or not reference:
+        logger.warning("Can't derive %s: %s and %s must both be synced", DERIVED_ROS_SUPERFLEX, ROS_1QB, WEEKLY_SUPERFLEX)
+        return None
+
+    by_fp_id = {r.fp_player_id: r for r in base}
+    order = derive_superflex_order([(r.fp_player_id, r.position) for r in base], [pos for (pos,) in reference])
+
+    session.query(RankingRecord).filter_by(source="fantasypros", page=DERIVED_ROS_SUPERFLEX).delete()
+    for rank, fp_id in enumerate(order, start=1):
+        src = by_fp_id[fp_id]
+        session.add(
+            RankingRecord(
+                source="fantasypros",
+                page=DERIVED_ROS_SUPERFLEX,
+                fp_player_id=fp_id,
+                sleeper_player_id=src.sleeper_player_id,
+                name=src.name,
+                team=src.team,
+                position=src.position,
+                rank_ecr=rank,
+                pos_rank=src.pos_rank,  # order within a position is unchanged
+                tier=None,  # FantasyPros tiers don't survive re-slotting
+                match_method=src.match_method,
+            )
+        )
+    _touch_sync_meta(session, f"rankings:{DERIVED_ROS_SUPERFLEX}")
+    matched = sum(1 for r in base if r.sleeper_player_id)
+    return RankingsSyncResult(page=DERIVED_ROS_SUPERFLEX, total=len(order), matched=matched)
+
+
+# Pause between consecutive FantasyPros page fetches in one sync run -- a full
+# sync scrapes several pages, and there's no reason to hit them back to back.
+_SCRAPE_DELAY_SECONDS = 5.0
+
+
+def sync_rankings_all(page: str | None = None, *, force: bool = False) -> list[RankingsSyncResult]:
+    """Sync one page, or (page=None) every page in pages.SOURCE_PAGES plus the
+    derived rest-of-season superflex page. Each page is TTL-gated on its own;
+    returns results only for pages that were actually refreshed."""
     init_db()
-    with FantasyProsClient() as client, get_session() as session:
-        return sync_rankings(session, client, page, force=force)
+    pages = [page] if page else list(SOURCE_PAGES)
+    results: list[RankingsSyncResult] = []
+    with FantasyProsClient() as client:
+        for p in pages:
+            if results:
+                time.sleep(_SCRAPE_DELAY_SECONDS)
+            with get_session() as session:
+                result = sync_rankings(session, client, p, force=force)
+            if result is not None:
+                results.append(result)
+
+    if page is None or page in (ROS_1QB, WEEKLY_SUPERFLEX):
+        with get_session() as session:
+            derived_missing = get_last_synced(session, f"rankings:{DERIVED_ROS_SUPERFLEX}") is None
+            if results or derived_missing:
+                derived = derive_ros_superflex(session)
+                if derived is not None:
+                    results.append(derived)
+    return results
+
+
+@dataclass
+class RefreshResult:
+    """What `fantasy-agent refresh` (and a GUI's refresh-on-open) actually
+    did -- each cache is only touched if its own TTL says it's stale, so this
+    distinguishes "skipped, still fresh" from "just refreshed" for both."""
+
+    players_refreshed: bool
+    players_age: dt.timedelta | None
+    players_synced_count: int | None  # None when skipped
+    rankings_refreshed: bool
+    rankings_age: dt.timedelta | None  # the *stalest* rankings page's age
+    rankings_results: list[RankingsSyncResult] = field(default_factory=list)  # pages actually refreshed
+
+
+def refresh_caches() -> RefreshResult:
+    """Pull the players and rankings caches if either is stale, each
+    respecting its own TTL (PLAYERS_CACHE_TTL_HOURS / RANKINGS_CACHE_TTL_HOURS)
+    -- safe to call on a schedule (the CLI's `refresh` command, or a
+    background thread when a GUI opens), since a still-fresh cache is just a
+    no-op. Deliberately narrower than sync_all(): just the two TTL-gated
+    pieces that go stale on their own clock, not league/roster/user/draft
+    history (those are small and re-synced every `fantasy-agent sync` run
+    regardless, so there's nothing for a scheduled refresh to gate there).
+    """
+    init_db()
+    now = dt.datetime.now(dt.timezone.utc)
+
+    with get_session() as session:
+        players_last_synced = get_last_synced(session, "players")
+        rankings_synced = [get_last_synced(session, f"rankings:{p}") for p in SOURCE_PAGES]
+
+    players_age = now - players_last_synced if players_last_synced else None
+    rankings_age = None if None in rankings_synced else now - min(rankings_synced)
+    players_stale = players_age is None or players_age >= dt.timedelta(hours=settings.players_cache_ttl_hours)
+    rankings_stale = rankings_age is None or rankings_age >= dt.timedelta(hours=settings.rankings_cache_ttl_hours)
+
+    players_count: int | None = None
+    if players_stale:
+        with SleeperClient(base_url=settings.sleeper_base_url) as client, get_session() as session:
+            players_count = sync_players(session, client, force=False)
+
+    # Each page is TTL-gated individually inside sync_rankings_all, so this
+    # only re-scrapes the pages that are actually stale.
+    rankings_results = sync_rankings_all(force=False) if rankings_stale else []
+
+    return RefreshResult(
+        players_refreshed=players_stale,
+        players_age=players_age,
+        players_synced_count=players_count,
+        rankings_refreshed=rankings_stale,
+        rankings_age=rankings_age,
+        rankings_results=rankings_results,
+    )

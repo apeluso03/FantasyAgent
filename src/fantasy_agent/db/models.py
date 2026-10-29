@@ -45,8 +45,16 @@ class LeagueRecord(Base):
 
 class UserRecord(Base):
     __tablename__ = "league_users"
+    __table_args__ = (UniqueConstraint("league_id", "user_id", name="uq_user_league_userid"),)
 
-    user_id: Mapped[str] = mapped_column(String, primary_key=True)
+    # user_id is only unique *within* a league, same as roster_id on
+    # RosterRecord below -- Sleeper reuses the same owner user_id every season
+    # a keeper league rolls over into a new league_id, so a global PK on
+    # user_id collides the moment a returning owner's prior season is already
+    # cached. The surrogate `id` here is the PK; (league_id, user_id) is the
+    # natural unique key.
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String)
     league_id: Mapped[str] = mapped_column(String, ForeignKey("leagues.league_id"))
     display_name: Mapped[str | None] = mapped_column(String, nullable=True)
     team_name: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -83,6 +91,14 @@ class PlayerRecord(Base):
     fantasy_positions: Mapped[list] = mapped_column(JSON, default=list)
     status: Mapped[str | None] = mapped_column(String, nullable=True)
     active: Mapped[bool | None] = mapped_column(nullable=True)
+    # Added for injury-adjusted values (trade.py's adjusted_player_value) --
+    # all nullable since most players have none of these set. See
+    # db/session.py's init_db() for how an existing SQLite file picks these
+    # columns up without a full resync.
+    injury_status: Mapped[str | None] = mapped_column(String, nullable=True)
+    injury_body_part: Mapped[str | None] = mapped_column(String, nullable=True)
+    injury_notes: Mapped[str | None] = mapped_column(String, nullable=True)
+    injury_start_date: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class SyncMeta(Base):
@@ -153,3 +169,40 @@ class PlayerAlias(Base):
     fp_player_id: Mapped[int] = mapped_column(Integer, primary_key=True)
     sleeper_player_id: Mapped[str] = mapped_column(String)
     note: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
+# -- Web-only tables below --
+#
+# AccountRecord/SessionRecord back the web backend's sign-in system
+# (backend/app/routers/auth.py). The CLI and Tkinter GUIs have no concept of
+# an "account" and never touch these tables; they live here only because
+# every table shares one SQLite file via this module's engine, the same
+# reason the Sleeper-cache tables above all live together.
+
+
+class AccountRecord(Base):
+    __tablename__ = "accounts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    email: Mapped[str] = mapped_column(String, unique=True)
+    password_hash: Mapped[str] = mapped_column(String)
+    display_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Mirrors the frontend's League override (state/LeagueContext.tsx) so it
+    # follows a signed-in user across devices/browsers instead of living only
+    # in one browser's localStorage.
+    default_league_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    default_owner_user_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SessionRecord(Base):
+    """An active login -- token is an opaque bearer credential (not a JWT) so
+    logout can actually revoke it server-side instead of just discarding it
+    client-side."""
+
+    __tablename__ = "sessions"
+
+    token: Mapped[str] = mapped_column(String, primary_key=True)
+    account_id: Mapped[int] = mapped_column(Integer, ForeignKey("accounts.id"))
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))

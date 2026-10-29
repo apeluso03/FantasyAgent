@@ -4,11 +4,12 @@ from sqlalchemy.orm import Session
 
 from fantasy_agent.db.models import Base, LeagueRecord, PlayerRecord, RankingRecord, RosterRecord, UserRecord
 from fantasy_agent.power_rankings import compute_power_rankings
+from fantasy_agent.trade import adjusted_player_value
 
 LEAGUE_ID = "league1"
 OWNER_A = "ownerA"
 OWNER_B = "ownerB"
-PAGE = "dynasty-superflex-overall"
+PAGE = "dynasty-superflex"
 ROSTER_POSITIONS = ["QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX", "SUPER_FLEX", "BN", "BN"]
 
 
@@ -128,3 +129,33 @@ def test_no_rosters_raises(session: Session) -> None:
     session.commit()
     with pytest.raises(RuntimeError, match="No cached rosters"):
         compute_power_rankings(session, league_id=LEAGUE_ID)
+
+
+def test_out_qb_is_skipped_for_starting_lineup_but_still_counts_in_positional_value(session: Session):
+    _seed_two_teams(session)
+    qb1 = session.query(PlayerRecord).filter_by(player_id="a_qb1").one()
+    qb1.injury_status = "Out"
+    qb1.injury_body_part = "Hamstring"
+    session.commit()
+
+    teams = compute_power_rankings(session, league_id=LEAGUE_ID)
+    team_a = next(t for t in teams if t.team_name == "Team A")
+
+    # Elite QB1 (rank 1, but Out) is skipped entirely -- Elite QB2 (rank 5,
+    # healthy) fills the QB slot instead, and nothing puts QB1 in SUPER_FLEX either.
+    qb_slot = next(s for s in team_a.starters if s.slot == "QB")
+    assert qb_slot.name == "Elite QB2"
+    assert qb_slot.injury_status is None
+    assert all(s.player_id != "a_qb1" for s in team_a.starters)
+
+    # But it still counts toward whole-roster QB positional value -- an
+    # injured star still has value, they're just not starting right now.
+    qb2 = session.query(PlayerRecord).filter_by(player_id="a_qb2").one()
+    expected_qb_value = adjusted_player_value(1, qb1).value + adjusted_player_value(5, qb2).value
+    assert team_a.positional_value["QB"] == pytest.approx(expected_qb_value)
+
+    # And it's surfaced in the team's injured-players summary.
+    injured = {p.player_id: p for p in team_a.injured_players}
+    assert "a_qb1" in injured
+    assert injured["a_qb1"].injury_status == "Out"
+    assert injured["a_qb1"].multiplier == 0.75

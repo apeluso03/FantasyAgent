@@ -14,7 +14,7 @@ from fantasy_agent.keeper import compute_keeper_candidates
 
 LEAGUE_ID = "league1"
 OWNER_ID = "owner1"
-PAGE = "dynasty-superflex-overall"
+PAGE = "dynasty-superflex"
 
 
 @pytest.fixture
