@@ -67,6 +67,15 @@ export function DraftIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+export function MockIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <rect x={3.5} y={4} width={17} height={16} rx={1.5} />
+      <path d="M3.5 9.5h17M3.5 15h17M9.2 4v16M14.8 4v16" />
+    </Icon>
+  );
+}
+
 export function SettingsIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <Icon {...props}>

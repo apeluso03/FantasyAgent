@@ -1,0 +1,384 @@
+{
+ "class": 2027,
+ "as_of": "2026-11-17",
+ "note": "Seed list of incoming 2027 NFL draft prospects for mock drafts. Consensus of DraftSharks (Jul 2026, top 75), Yardbarker (Aug 2026, top 24) and The Big Board (Nov 2026, top 4), superflex. Draft eligibility is not final until the NFL's January declaration deadline -- edit this file or replace it via `fantasy-agent mock-rookies-import`. Optional per-player 'adp' overrides the rank->ADP curve.",
+ "sources": [
+  "https://www.draftsharks.com/article/2027-superflex-rookie-rankings",
+  "https://www.yardbarker.com/college_football/articles/way_too_early_2027_dynasty_superflex_rookie_rankings_august_update/s1_17814_44172255",
+  "https://www.thebigboard.gg/dynasty/rookie-rankings-2027"
+ ],
+ "players": [
+  {
+   "rank": 1,
+   "name": "Jeremiah Smith",
+   "position": "WR",
+   "college": "Ohio State"
+  },
+  {
+   "rank": 2,
+   "name": "Cam Coleman",
+   "position": "WR",
+   "college": "Texas"
+  },
+  {
+   "rank": 3,
+   "name": "Jadan Baugh",
+   "position": "RB",
+   "college": "Florida"
+  },
+  {
+   "rank": 4,
+   "name": "Kewan Lacy",
+   "position": "RB",
+   "college": "Ole Miss"
+  },
+  {
+   "rank": 5,
+   "name": "Dante Moore",
+   "position": "QB",
+   "college": "Oregon"
+  },
+  {
+   "rank": 6,
+   "name": "Charlie Becker",
+   "position": "WR",
+   "college": "Indiana"
+  },
+  {
+   "rank": 7,
+   "name": "Nick Marsh",
+   "position": "WR",
+   "college": "Indiana"
+  },
+  {
+   "rank": 8,
+   "name": "Drew Mestemaker",
+   "position": "QB",
+   "college": "Oklahoma State"
+  },
+  {
+   "rank": 9,
+   "name": "Jamari Johnson",
+   "position": "TE",
+   "college": "Oregon"
+  },
+  {
+   "rank": 10,
+   "name": "Arch Manning",
+   "position": "QB",
+   "college": "Texas"
+  },
+  {
+   "rank": 11,
+   "name": "Trey'Dez Green",
+   "position": "TE",
+   "college": "LSU"
+  },
+  {
+   "rank": 12,
+   "name": "Darian Mensah",
+   "position": "QB",
+   "college": "Miami"
+  },
+  {
+   "rank": 13,
+   "name": "Ahmad Hardy",
+   "position": "RB",
+   "college": "Missouri"
+  },
+  {
+   "rank": 14,
+   "name": "KJ Duff",
+   "position": "WR",
+   "college": "Rutgers"
+  },
+  {
+   "rank": 15,
+   "name": "LaNorris Sellers",
+   "position": "QB",
+   "college": "South Carolina"
+  },
+  {
+   "rank": 16,
+   "name": "Ryan Coleman-Williams",
+   "position": "WR",
+   "college": "Alabama"
+  },
+  {
+   "rank": 17,
+   "name": "Trinidad Chambliss",
+   "position": "QB",
+   "college": "Ole Miss"
+  },
+  {
+   "rank": 18,
+   "name": "Nico Iamaleava",
+   "position": "QB",
+   "college": "UCLA"
+  },
+  {
+   "rank": 19,
+   "name": "Reed Harris",
+   "position": "WR",
+   "college": "Arizona State"
+  },
+  {
+   "rank": 20,
+   "name": "Jackson Harris",
+   "position": "WR",
+   "college": "LSU"
+  },
+  {
+   "rank": 21,
+   "name": "Isaac Brown",
+   "position": "RB",
+   "college": "Louisville"
+  },
+  {
+   "rank": 22,
+   "name": "Julian Sayin",
+   "position": "QB",
+   "college": "Ohio State"
+  },
+  {
+   "rank": 23,
+   "name": "Deuce Alexander",
+   "position": "WR",
+   "college": "Ole Miss"
+  },
+  {
+   "rank": 24,
+   "name": "Mark Fletcher",
+   "position": "RB",
+   "college": "Miami"
+  },
+  {
+   "rank": 25,
+   "name": "Duce Robinson",
+   "position": "WR",
+   "college": "Florida State"
+  },
+  {
+   "rank": 26,
+   "name": "DJ Lagway",
+   "position": "QB",
+   "college": "Baylor"
+  },
+  {
+   "rank": 27,
+   "name": "CJ Carr",
+   "position": "QB",
+   "college": "Notre Dame"
+  },
+  {
+   "rank": 28,
+   "name": "Jamal Roberts",
+   "position": "RB",
+   "college": "Missouri"
+  },
+  {
+   "rank": 29,
+   "name": "Ryan Wingo",
+   "position": "WR",
+   "college": "Texas"
+  },
+  {
+   "rank": 30,
+   "name": "Dylan Riley",
+   "position": "RB",
+   "college": "Boise State"
+  },
+  {
+   "rank": 31,
+   "name": "Austin Simmons",
+   "position": "QB",
+   "college": "Missouri"
+  },
+  {
+   "rank": 32,
+   "name": "Mario Craver",
+   "position": "WR",
+   "college": "Texas A&M"
+  },
+  {
+   "rank": 33,
+   "name": "Isaiah Sategna III",
+   "position": "WR",
+   "college": "Oklahoma"
+  },
+  {
+   "rank": 34,
+   "name": "DJ Vonnahme",
+   "position": "TE",
+   "college": "Iowa"
+  },
+  {
+   "rank": 35,
+   "name": "Omarion Miller",
+   "position": "WR",
+   "college": "Arizona State"
+  },
+  {
+   "rank": 36,
+   "name": "Bryant Wesco",
+   "position": "WR",
+   "college": "Clemson"
+  },
+  {
+   "rank": 37,
+   "name": "Nate Frazier",
+   "position": "RB",
+   "college": "Georgia"
+  },
+  {
+   "rank": 38,
+   "name": "Antwan Raymond",
+   "position": "RB",
+   "college": "Rutgers"
+  },
+  {
+   "rank": 39,
+   "name": "LJ Martin",
+   "position": "RB",
+   "college": "BYU"
+  },
+  {
+   "rank": 40,
+   "name": "Wyatt Young",
+   "position": "WR",
+   "college": "Oklahoma State"
+  },
+  {
+   "rank": 41,
+   "name": "Luke Reynolds",
+   "position": "TE",
+   "college": "Virginia Tech"
+  },
+  {
+   "rank": 42,
+   "name": "Cameron Dickey",
+   "position": "RB",
+   "college": "Texas Tech"
+  },
+  {
+   "rank": 43,
+   "name": "Jayden Maiava",
+   "position": "QB",
+   "college": "USC"
+  },
+  {
+   "rank": 44,
+   "name": "Justice Haynes",
+   "position": "RB",
+   "college": "Georgia Tech"
+  },
+  {
+   "rank": 45,
+   "name": "Raleek Brown",
+   "position": "RB",
+   "college": "Texas"
+  },
+  {
+   "rank": 46,
+   "name": "Terrance Carter",
+   "position": "TE",
+   "college": "Texas Tech"
+  },
+  {
+   "rank": 47,
+   "name": "Connor Weigman",
+   "position": "QB",
+   "college": "Houston"
+  },
+  {
+   "rank": 48,
+   "name": "TJ Moore",
+   "position": "WR",
+   "college": "Clemson"
+  },
+  {
+   "rank": 49,
+   "name": "Amare Thomas",
+   "position": "WR",
+   "college": "Houston"
+  },
+  {
+   "rank": 50,
+   "name": "Cam Cook",
+   "position": "RB",
+   "college": "West Virginia"
+  },
+  {
+   "rank": 51,
+   "name": "Wayne Knight",
+   "position": "RB",
+   "college": "UCLA"
+  },
+  {
+   "rank": 52,
+   "name": "Waymond Jordan",
+   "position": "RB",
+   "college": "USC"
+  },
+  {
+   "rank": 53,
+   "name": "Brendan Sorsby",
+   "position": "QB",
+   "college": "Texas Tech"
+  },
+  {
+   "rank": 54,
+   "name": "DeSean Bishop",
+   "position": "RB",
+   "college": "Tennessee"
+  },
+  {
+   "rank": 55,
+   "name": "Junior Sherrill",
+   "position": "WR",
+   "college": "Vanderbilt"
+  },
+  {
+   "rank": 56,
+   "name": "Nyck Harbor",
+   "position": "WR",
+   "college": "South Carolina"
+  },
+  {
+   "rank": 57,
+   "name": "Rocky Beers",
+   "position": "TE",
+   "college": "Oklahoma"
+  },
+  {
+   "rank": 58,
+   "name": "Hollywood Smothers",
+   "position": "RB",
+   "college": "Texas"
+  },
+  {
+   "rank": 59,
+   "name": "Mike Matthews",
+   "position": "WR",
+   "college": "Tennessee"
+  },
+  {
+   "rank": 60,
+   "name": "Chris Marshall",
+   "position": "WR",
+   "college": "Arkansas"
+  },
+  {
+   "rank": 61,
+   "name": "Beau Sparks",
+   "position": "WR",
+   "college": "Texas State"
+  },
+  {
+   "rank": 62,
+   "name": "Justin Bowick",
+   "position": "WR",
+   "college": "Oklahoma State"
+  }
+ ]
+}

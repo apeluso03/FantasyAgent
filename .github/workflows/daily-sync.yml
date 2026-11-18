@@ -40,3 +40,7 @@ jobs:
           curl -sf -X POST "${{ secrets.FANTASY_AGENT_API_URL }}/api/rankings/sync" \
             -H "$auth_header" -H "Content-Type: application/json" \
             "${access_header[@]}" -d '{"force": false}'
+          echo
+          # Mock draft ADP board (Sleeper ADP + FantasyPros + 2027 rookies).
+          curl -sf -X POST "${{ secrets.FANTASY_AGENT_API_URL }}/api/mock/adp/refresh" \
+            -H "$auth_header" "${access_header[@]}"

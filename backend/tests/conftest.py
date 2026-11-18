@@ -8,6 +8,8 @@ fixture seeds data under LEAGUE_ID/OWNER_ID below.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import httpx
 import pytest
 from fantasy_agent.config import settings
@@ -22,6 +24,7 @@ from sqlalchemy.pool import StaticPool
 from backend.app import jobs as jobs_module
 from backend.app.deps import get_db, get_sleeper_client
 from backend.app.main import app
+from backend.app.mock.rooms import rooms as mock_rooms
 
 LEAGUE_ID = "league1"
 OWNER_ID = "owner1"
@@ -30,6 +33,8 @@ PAGE = "dynasty-superflex"
 settings.sleeper_league_id = LEAGUE_ID
 settings.sleeper_owner_user_id = OWNER_ID
 settings.fantasypros_ranking_page = PAGE
+# No network at app startup in tests (main.py's background ADP board refresh).
+settings.mock_adp_refresh_hours = 0
 # Keep main.py's startup-time init_db() off the real data/fantasy_agent.db
 # file -- route calls go through the dependency override below instead.
 settings.database_url = "sqlite://"
@@ -53,6 +58,33 @@ def _override_get_db():
 
 
 app.dependency_overrides[get_db] = _override_get_db
+
+
+@contextmanager
+def _test_session_scope():
+    session = _TestSession()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+# Mock draft rooms persist through their own session scope (not a request
+# dependency), so point that at the same in-memory database.
+mock_rooms.session_scope = _test_session_scope
+
+
+@pytest.fixture(autouse=True)
+def _clean_mock_rooms():
+    # Rooms hold asyncio tasks/locks bound to one TestClient's event loop;
+    # each test gets a fresh client (and loop), so start with no rooms.
+    mock_rooms._rooms.clear()
+    yield
+    mock_rooms._rooms.clear()
 
 
 @pytest.fixture(autouse=True)

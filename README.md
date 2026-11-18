@@ -36,6 +36,8 @@ Complete, following the web migration spec's build order ([CLAUDE.md](CLAUDE.md)
 7. React + TypeScript frontend (all 7 pages, mobile-responsive, light/dark mode)
 8. Deploy-readiness: Dockerfile, docker-compose, verified Postgres compatibility
 9. Cleanup: the two Tkinter desktop GUIs retired (full history still in `git log`)
+10. Multiplayer mock draft simulator for 2027 (live rooms, invite links, traded picks, keepers,
+    CPU drafters, 2027 ADP with the incoming rookie class), deployable to Railway as one service
 
 ## Architecture
 
@@ -107,6 +109,26 @@ Still run the frontend separately via `npm run dev` — Vite's dev server + HMR 
 static container for day-to-day work. This is for exercising the backend against the same
 database engine a deployment would use; see `docker-compose.yml`'s comments.
 
+### Deploying to Railway
+
+The root `Dockerfile` builds the frontend and serves it from the backend, so the app, the API
+and the mock draft websockets share one origin, with no CORS or cross-origin websocket setup.
+
+1. Create a Railway project from this repo. It picks up `railway.json`, which sets the
+   Dockerfile build, 1 replica, and a `/api/health` healthcheck.
+2. Add a **PostgreSQL** database to the project, and set `DATABASE_URL=${{Postgres.DATABASE_URL}}`
+   on the app service. Railway's `postgresql://` URL is rewritten to the psycopg 3 driver
+   automatically.
+3. Set `SLEEPER_LEAGUE_ID`, `SLEEPER_OWNER_USER_ID`, `OPENAI_API_KEY` and `DEMO_ACCESS_CODE`.
+   `CORS_ORIGINS` isn't needed for the single-service setup.
+   **To host only the mock draft simulator,** set `APP_MODE=mock` instead. The site is then
+   just sign-in, the mock lobby, draft rooms and invite links: the league-tool pages aren't in
+   the build and their API routes aren't registered. None of the league or OpenAI variables are
+   needed in this mode.
+4. Generate a public domain. The ADP board builds in the background on first boot.
+
+Keep it at **one replica**: live mock draft rooms are held in that process's memory.
+
 ## Usage
 
 ### CLI
@@ -135,6 +157,12 @@ fantasy-agent best-available                # live draft board (polls Sleeper fr
 
 # --- The agent itself ---
 fantasy-agent ask "should I keep Bijan Robinson or draft fresh?"
+
+# --- Mock draft ADP board ---
+fantasy-agent mock-adp-refresh              # rebuild the 2027 board (Sleeper + FantasyPros + rookies)
+fantasy-agent mock-adp-show --mode 2027 --limit 50   # modes: 2027 | dynasty | redraft
+fantasy-agent mock-adp-show --rookies       # just the 2027 rookie class
+fantasy-agent mock-rookies-import big-board.csv   # replace the rookie seed (rank,name,position[,college][,adp])
 ```
 
 `players/nfl` is a multi-MB dump Sleeper asks callers not to poll frequently, so it's only
@@ -158,12 +186,53 @@ override for testing against a different Sleeper league without restarting the b
 status/triggers, demo access code). Sidebar nav on desktop, bottom tab bar on mobile; full
 light/dark mode.
 
+### Mock draft simulator
+
+**Mock Draft** (`/mock`) runs live, multiplayer mock drafts for the **2027** season, laid out like
+Sleeper's mock draft room: an on-the-clock strip with the pick timer and a ticker of
+recent/upcoming picks, the full board (one column per draft slot, colored by position), and
+Players / Queue / Rosters / Chat panels.
+
+- **Up to 12 drafters.** The host (signed in) creates a room and shares an invite link. Friends
+  join with just a name — no account. The draft doesn't need to be full to start: every unclaimed
+  team is drafted by a CPU that takes the best player by ADP, adjusted for team need (fills
+  starting slots first, caps QB/TE depth, takes the kicker in the last rounds).
+- **Defaults:** 12-team superflex PPR, 1 QB / 2 RB / 3 WR / 1 TE / 1 FLEX / 1 SUPER_FLEX / 1 K
+  plus 6 bench (16 rounds), snake, 60-second clock. Teams, rounds, roster slots, snake / linear /
+  3rd-round reversal, timer, CPU speed and CPU randomness can all be changed in the lobby.
+- **Traded picks.** The host can move any pick to any team: a team that traded for two
+  2nd-rounders gets both, at the original teams' slots, and those teams lose them. A pick can
+  also be removed. You can do this from the Setup form or by tapping a pick on the board.
+  **Import from Sleeper** pulls a real league's teams, roster settings, round count and *every
+  traded 2027 pick* from Sleeper's `traded_picks` endpoint in one step.
+- **Keepers.** Assign a player to a team in a round, and that keeper uses the team's earliest
+  pick in that round.
+- **During the draft:** pick queue (used when your clock runs out); autopick toggle (missing your
+  clock turns it on, like Sleeper); the host can pause/resume, undo, autopick now, pick for
+  someone, or reset. The page title flashes when it's your pick. Afterward you get a results
+  view with each team's lineup and value against ADP, graded against the room, plus a CSV export.
+- **2027 ADP.** Nobody publishes 2027 superflex ADP yet, so the board blends what exists: Sleeper
+  redraft 2QB ADP, Sleeper dynasty 2QB ADP, and FantasyPros dynasty superflex rankings. The
+  default "2027 projection" is halfway between redraft-now and dynasty, so it's roughly next
+  year's value. There are also dynasty-only and redraft-only modes. The **2027 rookie class**
+  (still in college, so not in Sleeper's database) comes from a seed list in
+  `src/fantasy_agent/mock_draft/rookies_2027.json`. It's a consensus of early-2026-season
+  superflex prospect rankings, and each rookie's rank is mapped onto the overall board. The NFL
+  draft eligibility list isn't final until January, so refresh this list with
+  `mock-rookies-import` as boards change. The board rebuilds automatically on startup when it's
+  more than 24h old (`MOCK_ADP_REFRESH_HOURS`).
+
+Rooms live in one server process: the engine state is in memory, persisted to the database
+after every change, and restored on restart. A pick clock that's running when the server restarts
+gets a fresh timer instead of auto-picking. Run exactly **one** backend worker/replica (see
+`railway.json`).
+
 ## Tests
 
 ```bash
-pytest                              # domain layer + CLI (100 tests)
-pytest backend/tests                # FastAPI routes (51 tests)
-cd frontend && npm test             # React components (9 tests)
+pytest tests                        # domain layer + CLI + mock draft engine (171 tests)
+pytest backend/tests                # FastAPI routes incl. mock draft rooms + websocket (66 tests)
+cd frontend && npm test             # React components (13 tests)
 ```
 
 All offline — Sleeper and FantasyPros HTTP calls are mocked with `httpx.MockTransport`, the OpenAI
@@ -190,6 +259,9 @@ src/fantasy_agent/      # unchanged domain layer -- also the CLI's entrypoint
   draft.py               # live best-available draft assistant (pure, no LLM)
   power_rankings.py      # league-wide power rankings + positional breakdown (pure, no LLM)
   player_analysis.py     # last-N-games PPR trend for the player detail panel
+  mock_draft/            # mock draft simulator: pure engine (order, traded picks, keepers),
+                         #   CPU drafter, 2027 ADP board builder, Sleeper league import,
+                         #   rookies_2027.json seed list
   agent/
     tools.py             # tool schemas + handlers exposed to the model
     core.py              # the manual tool-calling loop + run_agent_with_trace()
@@ -197,7 +269,8 @@ src/fantasy_agent/      # unchanged domain layer -- also the CLI's entrypoint
 backend/
   app/
     main.py, deps.py, schemas.py, auth.py, jobs.py
-    routers/             # auth, league, roster, rankings, keepers, trade, draft, players, sync, agent
+    routers/             # auth, league, roster, rankings, keepers, trade, draft, players, sync, agent, mock
+    mock/                # live mock draft rooms: in-memory state, websocket fan-out, pick clock
   tests/                 # FastAPI route tests, in-memory SQLite, auto-authenticated client
   Dockerfile
 frontend/
@@ -211,6 +284,8 @@ docs/screenshots/        # this README's screenshots
 CLAUDE.md                # web migration spec (phases, design decisions, open questions)
 fantasy-agent-spec.md    # original CLI/agent MVP spec
 docker-compose.yml        # backend + Postgres for local full-stack runs
+Dockerfile               # single-service image (frontend build served by the backend) for Railway
+railway.json             # Railway config: Dockerfile build, 1 replica, /api/health healthcheck
 .github/workflows/        # daily-sync.yml -- scheduled POST /api/sync once deployed
 ```
 

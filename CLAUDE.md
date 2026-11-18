@@ -424,3 +424,53 @@ Solved by never mutating `settings` at all — every read endpoint and the sync 
 - Protecting a public endpoint that spends money on every call.
 - Building real account auth (bcrypt + revocable server-side sessions, not a JWT) and enforcing it at the API layer, not just hiding UI behind a frontend check — and the 401-vs-403 split that let the two independent gates (login, demo access code) coexist without one tripping the other.
 - Threading a per-request override (the League switcher) through existing functions that already accepted the right arguments, instead of reaching for global mutable state — and where that approach still falls short (the agent's tool layer still reads global settings directly).
+
+---
+
+## 13. Mock Draft Simulator (post-migration feature)
+
+A live, multiplayer mock draft for the **2027** season, modeled on Sleeper's mock draft room. It reuses the stack (FastAPI, React, the shared DB) and is fully separate from the league-cache features: it doesn't need a synced league.
+
+### 13.1 Requirements
+
+- Up to 12 drafters per room. The host shares an invite link. The draft can start before every seat is filled, and the CPU drafts every unclaimed team by team need and best available.
+- **Traded picks** for the draft year: the host can give any team extra picks, which removes them from the team they came from, or remove a pick outright. **Import from Sleeper** pulls a real league's teams, roster settings, rounds, and every traded pick for the season from `/league/{id}/traded_picks`.
+- Defaults: superflex PPR with 1 QB / 2 RB / 3 WR / 1 TE / 1 FLEX / 1 SUPER_FLEX / 1 K + 6 BN (16 rounds), 12 teams, snake. Everything can be changed in the lobby (also linear and 3rd-round reversal).
+- ADP for the 2027 season, including the incoming 2027 rookie class. Sources: Sleeper and FantasyPros (13.4).
+- Hosted on Railway.
+
+Added beyond the original ask: keepers (they occupy that team's pick in their round), a pick clock with autopick on timeout (which also turns autopick on, like Sleeper), per-user queue, autopick toggle, chat, host pause/resume/undo/force-pick/reset, presence dots, a results view with value-vs-ADP grades, CSV export, and host seat recovery from a signed-in account on a new device.
+
+### 13.2 Layout
+
+- `src/fantasy_agent/mock_draft/`: domain layer. `engine.py` is a pure state machine with no I/O and no clock reads. `cpu.py` is the drafter. `adp.py` builds the board. `store.py` persists and refreshes the board. `sleeper_import.py` handles the league import. `rookies_2027.json` is the rookie seed list.
+- `backend/app/mock/`: `rooms.py` holds rooms in memory, a per-room asyncio "driver" task that runs CPU picks and the clock, and websocket fan-out. `views.py` builds the client snapshot.
+- `backend/app/routers/mock.py`: REST for every action (one `POST /drafts/{id}/actions` endpoint, so errors come back as normal HTTP responses). A websocket at `/drafts/{id}/ws` pushes state only.
+- `frontend/src/pages/Mock*Page.tsx`, `frontend/src/components/mock/`, `frontend/src/hooks/useMockDraft.ts`.
+- Tables: `mock_drafts`, with the whole `DraftState` as JSON plus the ADP pool snapshot taken at setup so the board can't shift mid-draft. `mock_adp` holds the board.
+
+### 13.3 Identity: traded picks
+
+A pick is keyed by `(round, original_team_id)`, which is the same key Sleeper's traded-picks endpoint uses. Its slot in the round comes from where the *original* team sits in the draft order. `pick_ownership` maps `"round:original"` to the new owner, or to `None` for a removed pick. So a traded pick stays at its original slot and in its original team's board column, labeled with its new owner, and reordering teams moves each team's original picks with it. `team_id` equals the Sleeper `roster_id` on import, so ownership copies over 1:1.
+
+### 13.4 ADP for a season that hasn't happened
+
+No source publishes 2027 superflex ADP yet. `adp.build_board()` blends three sources:
+
+- Sleeper's current-season `adp_2qb` (redraft), from the undocumented but public `api.sleeper.com/projections` endpoint.
+- Sleeper's `adp_dynasty_2qb`.
+- FantasyPros' `dynasty-superflex` ECR, matched to Sleeper IDs with the existing `rankings/matching.py`.
+
+It produces three ordinal boards: **2027** (50/50 redraft/dynasty, the default), **dynasty**, and **redraft**. The 2027 rookies have no Sleeper ID (`r27-<slug>` synthetic IDs, initials avatar). They come from a seed list built as a consensus of public superflex prospect rankings (DraftSharks Jul 2026, Yardbarker Aug 2026, The Big Board Nov 2026), and each rookie's rank is mapped onto the overall board by a per-mode curve (`ROOKIE_CURVES`). FantasyPros' own rookie page only covers the *current* class, so it couldn't be used. The seed list is the weakest input: refresh it with `fantasy-agent mock-rookies-import` once the January declaration deadline settles the class.
+
+### 13.5 Auth model
+
+Creating a draft needs an account, which keeps anonymous visitors from spinning up rooms. Everything inside a draft uses a per-draft participant token (`X-Mock-Token`, stored as a sha256 hash in the state), so invited friends join with just a name. The frontend keeps mock requests on a separate fetch wrapper (`api/mockClient.ts`) so that a mock-draft 401 ("not in this draft") never triggers the app-wide sign-out, and `/mock/join/:code` and `/mock/draft/:id` are routed outside the sign-in gate.
+
+### 13.6 Deployment (Railway)
+
+The root `Dockerfile` is a multi-stage build: Vite build, then FastAPI serving `frontend/dist` when `FRONTEND_DIST` is set, with an SPA fallback that never shadows `/api/*`. One origin means no CORS and no cross-origin websocket. `railway.json` pins **1 replica**, and the CMD pins `--workers 1`, because rooms live in process memory. That is the same tradeoff as `jobs.py`: DB persistence means a restart resumes every draft, with a fresh clock for whoever was on it, but it can't scale horizontally. The scale-out story is room state plus pub/sub in Redis. `config.py` rewrites Railway's `postgresql://` URL to `postgresql+psycopg://`. The board rebuilds in the background at startup when it's older than `MOCK_ADP_REFRESH_HOURS`, and `daily-sync.yml` also hits `POST /api/mock/adp/refresh`.
+
+**Verified locally:** the domain tests (720 simulated CPU rosters, all legal), backend route tests including websocket, timeout, and full CPU-completed drafts, and browser runs against a real ADP board. Those runs covered a host plus a no-account guest at phone width drafting together, and a full 12-team draft with traded and removed picks run to completion in single-origin production mode. **Not verified:** the Docker image build (Docker wasn't running on the dev machine) and an actual Railway deploy, which needs your Railway account.
+
+**Mock-only deployment.** Set `APP_MODE=mock` to host only the simulator. The Dockerfile passes it to the frontend build as `VITE_APP_MODE`, so the signed-in site is just the mock lobby (`MockOnlyApp` in `App.tsx`). The backend registers only `/api/health`, `/api/auth/*`, and `/api/mock/*`, so the league tools don't exist on that deployment, and no OpenAI or league variables are needed. On a fresh database, the startup refresh and the first draft creation both build the board through `store.ensure_board()`, which uses its own committed session behind a process-wide lock. Building it inside the request's session locked SQLite when the room was saved; this is covered by a regression test.

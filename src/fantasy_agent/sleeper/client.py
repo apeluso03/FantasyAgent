@@ -110,6 +110,15 @@ class SleeperClient:
         data = self._get(f"/draft/{draft_id}/picks")
         return [DraftPick.model_validate(p) for p in data]
 
+    def get_traded_picks(self, league_id: str) -> list[dict]:
+        """Every draft pick that has changed hands in this league, including
+        future seasons' picks -- each entry is {season, round, roster_id
+        (original owner), previous_owner_id, owner_id}, all roster IDs."""
+        return self._get(f"/league/{league_id}/traded_picks") or []
+
+    def get_draft(self, draft_id: str) -> Draft:
+        return Draft.model_validate(self._get(f"/draft/{draft_id}"))
+
     def get_nfl_state(self) -> NFLState:
         return NFLState.model_validate(self._get("/state/nfl"))
 

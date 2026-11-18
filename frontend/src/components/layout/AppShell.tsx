@@ -9,6 +9,7 @@ import {
   ChatIcon,
   DraftIcon,
   KeepersIcon,
+  MockIcon,
   RankingsIcon,
   RosterIcon,
   SettingsIcon,
@@ -22,6 +23,7 @@ const NAV_ITEMS = [
   { to: "/keepers", label: "Keepers", Icon: KeepersIcon },
   { to: "/trade", label: "Trade", Icon: TradeIcon },
   { to: "/draft", label: "Draft Board", Icon: DraftIcon },
+  { to: "/mock", label: "Mock Draft", Icon: MockIcon },
   { to: "/settings", label: "Settings", Icon: SettingsIcon },
 ] as const;
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -206,3 +206,46 @@ class SessionRecord(Base):
     account_id: Mapped[int] = mapped_column(Integer, ForeignKey("accounts.id"))
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     expires_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+
+
+# -- Mock draft simulator (fantasy_agent/mock_draft) --
+
+
+class MockAdpRecord(Base):
+    """One player on the mock draft's ADP board (see mock_draft/adp.py for
+    how the three per-mode ADPs are blended). Rebuilt wholesale on refresh."""
+
+    __tablename__ = "mock_adp"
+
+    player_id: Mapped[str] = mapped_column(String, primary_key=True)
+    name: Mapped[str] = mapped_column(String)
+    position: Mapped[str] = mapped_column(String)
+    team: Mapped[str | None] = mapped_column(String, nullable=True)
+    adp_2027: Mapped[float] = mapped_column(Float)
+    adp_dynasty: Mapped[float] = mapped_column(Float)
+    adp_redraft: Mapped[float] = mapped_column(Float)
+    is_rookie: Mapped[bool] = mapped_column(Boolean, default=False)
+    college: Mapped[str | None] = mapped_column(String, nullable=True)
+    years_exp: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    sources: Mapped[list] = mapped_column(JSON, default=list)
+    built_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MockDraftRecord(Base):
+    """A mock draft room. `state` is the whole engine DraftState as JSON
+    (teams, picks, ownership, keepers, chat) -- one row per draft, rewritten
+    after every change, which is plenty for <=12 teams x 30 rounds. `pool` is
+    the ADP snapshot taken when the draft was set up, so the board can't
+    shift underneath a draft in progress."""
+
+    __tablename__ = "mock_drafts"
+
+    draft_id: Mapped[str] = mapped_column(String, primary_key=True)
+    invite_code: Mapped[str] = mapped_column(String, unique=True, index=True)
+    host_account_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("accounts.id"), nullable=True)
+    name: Mapped[str] = mapped_column(String)
+    status: Mapped[str] = mapped_column(String, default="lobby")
+    state: Mapped[dict] = mapped_column(JSON, default=dict)
+    pool: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)

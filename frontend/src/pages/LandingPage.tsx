@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 
 import { useLogin, useSignup } from "@/hooks/useAuthApi";
+import { MOCK_ONLY } from "@/lib/appMode";
 import { useAuth } from "@/state/AuthContext";
 
 type Mode = "signin" | "signup";
@@ -33,9 +34,13 @@ export function LandingPage() {
     <div className="flex min-h-screen items-center justify-center bg-neutral-50 px-4 dark:bg-neutral-950">
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
-          <h1 className="text-2xl font-bold text-hunter-dark dark:text-celadon">FantasyAgent</h1>
+          <h1 className="text-2xl font-bold text-hunter-dark dark:text-celadon">
+            {MOCK_ONLY ? "2027 Mock Draft" : "FantasyAgent"}
+          </h1>
           <p className="mt-1 text-sm text-neutral-500">
-            Keeper, trade, and draft decisions for your Sleeper league -- grounded in real data, not vibes.
+            {MOCK_ONLY
+              ? "Live superflex mock drafts with your league -- traded picks, keepers, and the 2027 rookie class. Sign in to host; friends join from your invite link."
+              : "Keeper, trade, and draft decisions for your Sleeper league -- grounded in real data, not vibes."}
           </p>
         </div>
 

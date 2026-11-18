@@ -19,6 +19,8 @@ export default defineConfig({
       "/api": {
         target: "http://localhost:8000",
         changeOrigin: true,
+        // Mock draft rooms push live state over a websocket at /api/mock/.../ws.
+        ws: true,
       },
     },
   },

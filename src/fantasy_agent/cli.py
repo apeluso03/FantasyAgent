@@ -15,6 +15,9 @@ Usage:
     fantasy-agent ask "should I keep Bijan Robinson or draft fresh?"
     fantasy-agent best-available
     fantasy-agent rosters --detail
+    fantasy-agent mock-adp-refresh
+    fantasy-agent mock-adp-show --mode 2027 --limit 50
+    fantasy-agent mock-rookies-import rookies.csv
 """
 
 from __future__ import annotations
@@ -356,6 +359,80 @@ def best_available(
         for p in players:
             typer.echo(f"#{p.rank_ecr:<4} {p.name:<25} {p.position:<4} {p.team or 'FA':<4} {p.pos_rank or '':<6}")
             typer.echo(f"    {p.reasoning}")
+
+
+@app.command("mock-adp-refresh")
+def mock_adp_refresh(
+    season: str = typer.Option(None, help="Season to pull Sleeper ADP from (defaults to the current NFL season)."),
+) -> None:
+    """Rebuild the mock draft's 2027 ADP board (Sleeper + FantasyPros + the 2027 rookie seed list)."""
+    from .db.session import init_db
+    from .mock_draft.store import refresh_board
+
+    init_db()
+    with get_session() as session:
+        result = refresh_board(session, adp_season=season)
+    typer.echo(f"Board rebuilt: {result.players} players ({result.rookies} 2027 rookies), ADP season {result.adp_season}.")
+    for source, count in sorted(result.sources.items()):
+        typer.echo(f"  {source:<26} {count}")
+    for w in result.warnings:
+        typer.echo(f"  warning: {w}")
+
+
+@app.command("mock-adp-show")
+def mock_adp_show(
+    mode: str = typer.Option("2027", help="2027 | dynasty | redraft"),
+    limit: int = typer.Option(50),
+    rookies_only: bool = typer.Option(False, "--rookies"),
+) -> None:
+    """Print the mock draft ADP board."""
+    from .mock_draft.store import load_board
+
+    with get_session() as session:
+        board = load_board(session)
+    if not board:
+        typer.echo("No board yet -- run `fantasy-agent mock-adp-refresh` first.")
+        raise typer.Exit(code=1)
+    rows = sorted((b for b in board if b.is_rookie or not rookies_only), key=lambda b: b.adp_for(mode))
+    for b in rows[:limit]:
+        where = b.team or (f"{b.college} (2027 rookie)" if b.is_rookie else "FA")
+        typer.echo(f"{b.adp_for(mode):>6.0f}  {b.name:<28} {b.position:<4} {where}")
+
+
+@app.command("mock-rookies-import")
+def mock_rookies_import(
+    csv_path: str = typer.Argument(..., help="CSV with columns rank,name,position[,college][,adp]."),
+) -> None:
+    """Replace the 2027 rookie seed list from a CSV (e.g. an updated big board), then rebuild with mock-adp-refresh."""
+    import csv
+    import json
+
+    from .mock_draft.adp import ROOKIE_SEED_PATH
+
+    with open(csv_path, newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    players = []
+    for i, row in enumerate(rows, start=1):
+        pos = (row.get("position") or "").strip().upper()
+        if pos not in ("QB", "RB", "WR", "TE"):
+            typer.echo(f"Skipping row {i}: position {pos!r} isn't QB/RB/WR/TE.")
+            continue
+        entry = {
+            "rank": int(row.get("rank") or i),
+            "name": row["name"].strip(),
+            "position": pos,
+            "college": (row.get("college") or "").strip() or None,
+        }
+        if row.get("adp"):
+            entry["adp"] = float(row["adp"])
+        players.append(entry)
+    players.sort(key=lambda p: p["rank"])
+    existing = json.loads(ROOKIE_SEED_PATH.read_text(encoding="utf-8"))
+    existing["players"] = players
+    existing["as_of"] = dt.date.today().isoformat()
+    existing["note"] = f"Imported from {csv_path}."
+    ROOKIE_SEED_PATH.write_text(json.dumps(existing, indent=1, ensure_ascii=False), encoding="utf-8")
+    typer.echo(f"Wrote {len(players)} rookies to {ROOKIE_SEED_PATH}. Run `fantasy-agent mock-adp-refresh` to rebuild the board.")
 
 
 if __name__ == "__main__":

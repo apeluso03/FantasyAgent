@@ -1,4 +1,4 @@
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -77,6 +77,24 @@ class Settings(BaseSettings):
     # in an X-Access-Code header. A public URL that calls the OpenAI API with
     # your key can otherwise run up a bill from anyone who finds the link.
     demo_access_code: str | None = None
+    # Web backend only -- rebuild the mock draft ADP board in the background
+    # at startup when it's missing or older than this. 0 disables (tests).
+    mock_adp_refresh_hours: int = 24
+    # Web backend only -- "mock" serves just the mock draft simulator (health,
+    # auth, /api/mock/*); every league-tool route is left unregistered. "full"
+    # is the whole app. Pair with the frontend's VITE_APP_MODE.
+    app_mode: str = "full"
+
+    @field_validator("database_url")
+    @classmethod
+    def _use_psycopg3_dialect(cls, url: str) -> str:
+        # Hosted Postgres (Railway, Render, Heroku-style) hands out
+        # postgres:// or postgresql:// URLs, which SQLAlchemy maps to the
+        # psycopg2 driver -- not installed here. Point them at psycopg 3.
+        for prefix in ("postgres://", "postgresql://"):
+            if url.startswith(prefix):
+                return "postgresql+psycopg://" + url[len(prefix) :]
+        return url
 
 
 settings = Settings()

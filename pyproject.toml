@@ -38,5 +38,10 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+# The 2027 rookie seed list ships with the package so a non-editable install
+# (the Docker image) still has it.
+fantasy_agent = ["mock_draft/*.json"]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
