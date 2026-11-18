@@ -6,9 +6,10 @@
 # backend/Dockerfile is still the API-only image for the split
 # Vercel/Netlify + separate-backend setup (CLAUDE.md section 7.3).
 
-# APP_MODE=mock builds/serves only the mock draft simulator; "full" is the
-# whole app. Railway passes service variables to declared build ARGs, so
-# setting APP_MODE on the service covers both stages.
+# APP_MODE=mock serves only the mock draft simulator; "full" is the whole
+# app. The runtime variable is what counts: the backend skips the other
+# routes, and the frontend asks /api/health which mode it's in at load. (If
+# Railway also passes it as a build arg, it's baked in too -- same result.)
 ARG APP_MODE=full
 
 # --- frontend build ---

@@ -64,7 +64,7 @@ app.add_middleware(
 
 @app.get("/api/health", response_model=HealthOut, tags=["health"])
 def health() -> dict:
-    return {"status": "ok", "version": APP_VERSION}
+    return {"status": "ok", "version": APP_VERSION, "mode": "mock" if settings.app_mode == "mock" else "full"}
 
 
 app.include_router(auth.router, prefix="/api")

@@ -3,6 +3,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 
+import { AppModeProvider } from "@/lib/appMode";
 import { AuthProvider } from "@/state/AuthContext";
 
 import App from "./App";
@@ -21,9 +22,11 @@ createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
-        <AuthProvider>
-          <App />
-        </AuthProvider>
+        <AppModeProvider>
+          <AuthProvider>
+            <App />
+          </AuthProvider>
+        </AppModeProvider>
       </BrowserRouter>
     </QueryClientProvider>
   </StrictMode>,

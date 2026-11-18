@@ -14,7 +14,7 @@ import { MyRosterPage } from "@/pages/MyRosterPage";
 import { PowerRankingsPage } from "@/pages/PowerRankingsPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { TradeAnalyzerPage } from "@/pages/TradeAnalyzerPage";
-import { MOCK_ONLY } from "@/lib/appMode";
+import { useMockOnly } from "@/lib/appMode";
 import { useAuth } from "@/state/AuthContext";
 import { LeagueProvider } from "@/state/LeagueContext";
 import { PlayerPanelProvider } from "@/state/PlayerPanelContext";
@@ -76,6 +76,7 @@ function MockOnlyApp() {
 
 function GatedApp() {
   const { account, isLoading } = useAuth();
+  const mockOnly = useMockOnly();
 
   if (isLoading) {
     // Validating a stored token -- avoid flashing the landing page for an
@@ -84,7 +85,7 @@ function GatedApp() {
   }
 
   if (!account) return <LandingPage />;
-  return MOCK_ONLY ? <MockOnlyApp /> : <AuthenticatedApp />;
+  return mockOnly ? <MockOnlyApp /> : <AuthenticatedApp />;
 }
 
 export default function App() {

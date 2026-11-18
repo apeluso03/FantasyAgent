@@ -19,6 +19,9 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 class HealthOut(BaseModel):
     status: str
     version: str
+    # "mock" when the deployment hosts only the mock draft simulator -- the
+    # frontend reads this at load to decide which pages exist.
+    mode: str = "full"
 
 
 class LeagueOut(BaseModel):

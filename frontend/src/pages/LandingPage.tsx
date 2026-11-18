@@ -1,13 +1,14 @@
 import { useState, type FormEvent } from "react";
 
 import { useLogin, useSignup } from "@/hooks/useAuthApi";
-import { MOCK_ONLY } from "@/lib/appMode";
+import { useMockOnly } from "@/lib/appMode";
 import { useAuth } from "@/state/AuthContext";
 
 type Mode = "signin" | "signup";
 
 export function LandingPage() {
   const { setSession } = useAuth();
+  const MOCK_ONLY = useMockOnly();
   const [mode, setMode] = useState<Mode>("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
