@@ -85,6 +85,15 @@ class Settings(BaseSettings):
     # is the whole app. Pair with the frontend's VITE_APP_MODE.
     app_mode: str = "full"
 
+    @field_validator("app_mode", mode="before")
+    @classmethod
+    def _normalize_app_mode(cls, value: object) -> str:
+        # Hosting dashboards make it easy to save `"mock"`, `Mock` or
+        # `mock ` -- all of which should mean mock. Anything else (incl.
+        # unset/empty) is the full app.
+        text = str(value or "").strip().strip("\"'").strip().lower()
+        return "mock" if text == "mock" else "full"
+
     @field_validator("database_url")
     @classmethod
     def _use_psycopg3_dialect(cls, url: str) -> str:

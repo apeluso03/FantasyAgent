@@ -30,6 +30,11 @@ log = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     init_db()
+    # Shows up in the deploy logs -- the quickest way to confirm a host's
+    # APP_MODE variable actually reached the process.
+    log.warning(
+        "App mode: %s (APP_MODE env = %r)", settings.app_mode, os.environ.get("APP_MODE")
+    )
     # Fire-and-forget: a fresh deploy (empty Postgres) has no ADP board yet,
     # and the board goes stale as ADP moves. Never blocks startup.
     refresh = asyncio.create_task(asyncio.to_thread(_refresh_stale_mock_board))

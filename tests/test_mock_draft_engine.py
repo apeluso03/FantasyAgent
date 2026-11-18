@@ -184,3 +184,10 @@ def test_replace_teams_applies_imported_trades():
     assert d.settings.num_teams == 3 and d.settings.rounds == 5
     assert d.teams[0].participant_id == "p1"
     assert d.pick_ownership == {"2:1": 3}
+
+
+@pytest.mark.parametrize("raw,expected", [("mock", "mock"), ('"mock"', "mock"), (" Mock ", "mock"), ("full", "full"), ("", "full")])
+def test_app_mode_tolerates_dashboard_formatting(raw, expected):
+    from fantasy_agent.config import Settings
+
+    assert Settings(app_mode=raw).app_mode == expected
