@@ -121,10 +121,10 @@ and the mock draft websockets share one origin, with no CORS or cross-origin web
    automatically.
 3. Set `SLEEPER_LEAGUE_ID`, `SLEEPER_OWNER_USER_ID`, `OPENAI_API_KEY` and `DEMO_ACCESS_CODE`.
    `CORS_ORIGINS` isn't needed for the single-service setup.
-   **To host only the mock draft simulator,** set `APP_MODE=mock` instead. The site is then
-   just sign-in, the mock lobby, draft rooms and invite links: the league-tool pages aren't in
-   the build and their API routes aren't registered. None of the league or OpenAI variables are
-   needed in this mode.
+   This image defaults to **mock-only** (`APP_MODE=mock`): the site is just sign-in, the mock
+   lobby, draft rooms and invite links. The league-tool pages are hidden and their API routes
+   aren't registered, and none of the league or OpenAI variables are needed. Set `APP_MODE=full`
+   on the service to serve the whole app.
 4. Generate a public domain. The ADP board builds in the background on first boot.
 
 Keep it at **one replica**: live mock draft rooms are held in that process's memory.

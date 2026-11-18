@@ -6,16 +6,9 @@
 # backend/Dockerfile is still the API-only image for the split
 # Vercel/Netlify + separate-backend setup (CLAUDE.md section 7.3).
 
-# APP_MODE=mock serves only the mock draft simulator; "full" is the whole
-# app. The runtime variable is what counts: the backend skips the other
-# routes, and the frontend asks /api/health which mode it's in at load. (If
-# Railway also passes it as a build arg, it's baked in too -- same result.)
-ARG APP_MODE=full
-
 # --- frontend build ---
+# Mode-agnostic: the built app asks /api/health which mode the server is in.
 FROM node:22-slim AS frontend
-ARG APP_MODE
-ENV VITE_APP_MODE=${APP_MODE}
 WORKDIR /frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
@@ -25,8 +18,6 @@ RUN npm run build
 
 # --- backend + static frontend ---
 FROM python:3.12-slim
-ARG APP_MODE
-ENV APP_MODE=${APP_MODE}
 WORKDIR /app
 
 COPY pyproject.toml ./
@@ -37,8 +28,13 @@ RUN pip install --no-cache-dir ".[web]"
 
 COPY --from=frontend /frontend/dist ./frontend_dist
 
+# This image is the Railway deploy, which hosts only the mock draft
+# simulator -- so mock is the default here, no dashboard variable needed.
+# Set APP_MODE=full on the service to serve the whole app instead (a
+# service variable overrides this at runtime).
 ENV PYTHONUNBUFFERED=1 \
     FRONTEND_DIST=/app/frontend_dist \
+    APP_MODE=mock \
     PORT=8000
 EXPOSE 8000
 
